@@ -1,0 +1,162 @@
+{
+  "_comment": "AUTHORITATIVE business configuration for T-number / Site ID derivation. It is version-controlled and loaded by the backend at the start of every processing job; users never upload rules. 'rules' holds the approved rules (taken from the approved T Number Rules worksheet), 'patterns' their technical definitions. Column aliases are compared after lower-casing and removing every non-alphanumeric character.",
+  "version": "2026-10-22.4",
+
+  "columns": {
+    "VENDOR_SITE_CODE": ["vendorsitecode"],
+    "VENDOR_SITE_CODE_ALT": ["vendorsitecodealt", "vendorsitecodealternate", "vendorsitecodealternative"],
+    "VENDOR_SITE": ["vendorsite"],
+    "T_NUMBER": ["tnumber", "tno", "tnum"],
+    "SITE_ID": ["siteid"],
+    "ACCOUNT_NUMBER": ["accountnumber", "accountno", "accountnum", "acctnumber"]
+  },
+
+  "file_roles": {
+    "_comment": "'source' is the uploaded Source File. The other roles are optional supporting datasets, recognised from their worksheet columns (never from the filename alone).",
+    "source": {
+      "label": "Source file",
+      "required_any": [["VENDOR_SITE_CODE", "VENDOR_SITE"]],
+      "optional": ["VENDOR_SITE_CODE_ALT"]
+    },
+    "bts": {
+      "label": "BTS Site Report Schedule",
+      "required": ["VENDOR_SITE_CODE", "T_NUMBER"],
+      "optional": ["VENDOR_SITE_CODE_ALT", "SITE_ID"],
+      "filename_hints": ["bts", "sitereport", "siteschedule"]
+    },
+    "ops": {
+      "label": "Operational Site List Summary",
+      "required": ["ACCOUNT_NUMBER", "SITE_ID"],
+      "optional": [],
+      "filename_hints": ["operational", "opssite", "sitelist"]
+    },
+    "latest_payment": {
+      "label": "Latest Payment Data",
+      "required": ["VENDOR_SITE"],
+      "optional": [],
+      "filename_hints": ["latestpayment", "paymentdata"]
+    }
+  },
+
+  "rules": [
+    {"id": "R1", "kind": "BTS_REFERENCE", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "T_NUMBER", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Match the Vendor Site Code against the BTS Site Report Schedule and retrieve the corresponding T-number as the Site ID wherever a valid match is available.",
+     "additional_info": "If the same vendor site code is associated with conflicting T-numbers across records or sources, flag the discrepancy for review."},
+    {"id": "R2", "kind": "T_DIRECT", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code contains a Site Identifier in the format 'T' followed by a numeric value (e.g., T6542), the entire value should be directly mapped and treated as the Site ID."},
+    {"id": "R3", "kind": "DIGITS_MTN", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code consists of four digits followed by the suffix MTN (e.g., 3133MTN), derive the Site ID by prefixing the four-digit numeric component with T (e.g., T3133).",
+     "additional_info": "If the same vendor site code is associated with conflicting T-numbers across records or sources, flag the discrepancy for review."},
+    {"id": "R4", "kind": "X_PREFIX", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code begins with X followed by a numeric identifier (e.g., X8754), treat the complete code as a candidate Site ID, subject to validation against the approved site identifier format and reference data.",
+     "additional_info": "Validate that the code represents a site identifier rather than a RAN or transmission-related reference. Flag unverified or conflicting cases."},
+    {"id": "R5", "kind": "T_SUFFIX_ELEC", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code contains a T-number followed by the suffix /ELEC, extract only the T-number portion as the candidate Site ID.",
+     "additional_info": "This pattern may occur in electricity payment line items. Retain the original Vendor Site Code for traceability."},
+    {"id": "R6", "kind": "T_SUFFIX_E", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code contains a T-number followed by the suffix /E, extract only the T-number portion as the candidate Site ID.",
+     "additional_info": "Confirm that /E is a recognised suffix and distinguish it from longer suffixes, such as /ELEC, before applying this rule."},
+    {"id": "R7", "kind": "T_OTHER_SUFFIX", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code contains a valid T-number followed by another recognised suffix or delimiter, extract the T-number portion and use it as the candidate Site ID.",
+     "additional_info": "Document the recognised suffixes explicitly. Do not remove arbitrary text unless the resulting T-number passes validation.",
+     "confirmation_needed": "The approved rules name only /ELEC (R5) and /E (R6) as suffixes, and both already have their own rules. R7 needs the explicit list of OTHER approved suffixes/delimiters (for example '/S', '-RENT', '_'), to be added to recognised_suffixes.values."},
+    {"id": "R8", "kind": "T_EMBEDDED", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code contains a valid T-number embedded within a prefix, word or other text (e.g., ABC-T8102-RENT), extract the T-number using the approved identifier format.",
+     "additional_info": "If multiple T-numbers are detected in the same field, flag the record for review unless an explicit rule defines which identifier to use."},
+    {"id": "R9", "kind": "T_LENGTH", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "It is not necessary that a T number is of only 4 digits; it can be 5 digits also."},
+    {"id": "R10", "kind": "NUM_MTN_S", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code begins with a numeric value followed by 'MTN/S', the leading numeric value should be considered and extracted as the Site ID."},
+    {"id": "R11", "kind": "NUM_MTN_E", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code begins with a numeric value followed by 'MTN/E', the leading numeric value should be considered and extracted as the Site ID."},
+    {"id": "R12", "kind": "MTN_PREFIX_NUM", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code begins with 'MTN' followed by a 4- or 5-digit numeric value, the numeric portion should be extracted and treated as the Site ID."},
+    {"id": "R13", "kind": "LEADING_NUMERIC", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code begins with a 4- or 5-digit numeric value followed by any text or characters, the leading numeric value should be extracted and treated as the Site ID."},
+    {"id": "R14", "kind": "LEADING_ZERO", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code starts with a leading zero followed by a 3-digit number, the leading zero should be removed and the remaining 3-digit number should be treated as the Site ID."},
+    {"id": "R15", "kind": "T_DIRECT", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt contains a Site Identifier in the format 'T' followed by a numeric value (e.g., T6542), the entire value should be directly mapped and treated as the Site ID."},
+    {"id": "R16", "kind": "DIGITS_MTN", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt consists of four digits followed by the suffix MTN (e.g., 3133MTN), derive the Site ID by prefixing the four-digit numeric component with T (e.g., T3133)."},
+    {"id": "R17", "kind": "X_PREFIX", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt begins with X followed by a numeric identifier (e.g., X8754), treat the complete code as a candidate Site ID, subject to validation against the approved site identifier format and reference data."},
+    {"id": "R18", "kind": "T_SUFFIX_ELEC", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code contains a T-number followed by the suffix /ELEC, extract only the T-number portion as the candidate Site ID."},
+    {"id": "R19", "kind": "T_SUFFIX_ELEC", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt contains a T-number followed by the suffix /ELEC, extract only the T-number portion as the candidate Site ID."},
+    {"id": "R20", "kind": "T_SUFFIX_E", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt contains a T-number followed by the suffix /E, extract only the T-number portion as the candidate Site ID."},
+    {"id": "R21", "kind": "T_OTHER_SUFFIX", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt contains a valid T-number followed by another recognised suffix or delimiter, extract the T-number portion and use it as the candidate Site ID.",
+     "confirmation_needed": "Same as R7, for VENDOR_SITE_CODE_ALT: the explicit list of approved suffixes/delimiters other than /ELEC and /E."},
+    {"id": "R22", "kind": "T_EMBEDDED", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt contains a valid T-number embedded within a prefix, word or other text (e.g., ABC-T8102-RENT), extract the T-number using the approved identifier format."},
+    {"id": "R23", "kind": "NUM_MTN_S", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt begins with a numeric value followed by 'MTN/S', the leading numeric value should be considered and extracted as the Site ID."},
+    {"id": "R24", "kind": "NUM_MTN_E", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt begins with a numeric value followed by 'MTN/E', the leading numeric value should be considered and extracted as the Site ID."},
+    {"id": "R25", "kind": "MTN_PREFIX_NUM", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt begins with 'MTN' followed by a 4- or 5-digit numeric value, the numeric portion should be extracted and treated as the Site ID."},
+    {"id": "R26", "kind": "LEADING_NUMERIC", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt begins with a 4- or 5-digit numeric value followed by any text or characters, the leading numeric value should be extracted and treated as the Site ID."},
+    {"id": "R27", "kind": "LEADING_ZERO", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
+     "description": "Where the Vendor Site Code Alt starts with a leading zero followed by a 3-digit number, the leading zero should be removed and the remaining 3-digit number should be treated as the Site ID."},
+    {"id": "R28", "kind": "OPS_REFERENCE", "status": "approved", "data_source": "Operational Site List Summary", "column": "ACCOUNT_NUMBER", "matching_column": "SITE_ID",
+     "description": "Where the Account number is matching with the Vendor Site Code of the source data then map the Site ID column from the Operational Site List Summary in the output data."},
+    {"id": "R29", "kind": "T_DIRECT", "status": "approved", "data_source": "Latest Payment Data", "column": "VENDOR_SITE", "matching_column": "VENDOR_SITE",
+     "description": "Where the Vendor Site contains a Site Identifier in the format 'T' followed by a numeric value (e.g., T6542), the entire value should be directly mapped and treated as the Site ID."}
+  ],
+
+  "identifier_formats": {
+    "_comment": "T-number digit lengths [min, max]: 'default' applies when no approved T-number length rule (R9) is active; 'with_length_rule' when it is.",
+    "tnumber_digit_lengths_default": [4, 4],
+    "tnumber_digit_lengths_with_length_rule": [4, 5],
+    "numeric_site_id_pattern": "^\\d{3,5}$",
+    "x_site_id_pattern": "^X\\d{3,6}$"
+  },
+
+  "patterns": {
+    "_comment": "{T} is replaced with the approved T-number digit-length quantifier, e.g. 4,5. Values are cleaned (Unicode-normalised, invisible characters removed, trimmed, upper-cased) before matching; the original value is never changed. LEADING_NUMERIC excludes a leading zero because values with a leading zero are governed by LEADING_ZERO.",
+    "T_DIRECT": "^T(?P<num>\\d{{T}})$",
+    "DIGITS_MTN": "^(?P<num>\\d{{T}})\\s*MTN$",
+    "X_PREFIX": "^X(?P<num>\\d+)(?!\\d)",
+    "T_SUFFIX_ELEC": "(?<![A-Z0-9])T(?P<num>\\d{{T}})\\s*/\\s*ELEC(?![A-Z0-9])",
+    "T_SUFFIX_E": "(?<![A-Z0-9])T(?P<num>\\d{{T}})\\s*/\\s*E(?![A-Z0-9])",
+    "T_OTHER_SUFFIX": "^T(?P<num>\\d{{T}})\\s*(?:{SUFFIXES})$",
+    "T_EMBEDDED": "(?<![A-Z0-9])T(?P<num>\\d{{T}})(?!\\d)",
+    "NUM_MTN_S": "^(?P<num>\\d+)\\s*MTN\\s*/\\s*S",
+    "NUM_MTN_E": "^(?P<num>\\d+)\\s*MTN\\s*/\\s*E",
+    "MTN_PREFIX_NUM": "^MTN\\s*(?P<num>\\d{4,5})(?!\\d)",
+    "LEADING_NUMERIC": "^(?P<num>[1-9]\\d{3,4})(?!\\d).+",
+    "LEADING_ZERO": "^0(?P<num>\\d{3})(?!\\d)"
+  },
+
+  "recognised_suffixes": {
+    "_comment": "Suffixes/delimiters approved for the 'other recognised suffix' rules (R7/R21), as regex fragments matched after the T-number, e.g. \"/S\" or \"-RENT\". Empty = not yet confirmed by the business: R7/R21 stay flagged and are not executed. Values containing a T-number plus other text are still handled by the embedded rules R8/R22.",
+    "values": []
+  },
+
+  "x_codes": {
+    "_comment": "Business instruction (2026-10-22): an X-code (R4 on VENDOR_SITE_CODE, then R17 on VENDOR_SITE_CODE_ALT) is mapped even when it is not found in the reference data. accept_without_reference=false restores reference-only validation (unverified X-codes are flagged, not mapped). map_to_tnumber=true writes the complete X-code to TNUMBER as well as SITE ID.",
+    "accept_without_reference": true,
+    "map_to_tnumber": true
+  },
+
+  "missing_value_markers": {
+    "_comment": "Reference-data cell values that mean 'no value' and are treated as blank (compared after trimming and upper-casing). Source values are never changed.",
+    "values": ["NA", "N/A", "#N/A", "NULL", "NONE", "-", "--"]
+  },
+
+  "source_column_fallbacks": {
+    "_comment": "When the source file lacks a rule's column, the rule reads the first listed fallback column that is present. 'Vendor Site' in a payment extract is the vendor site code of the base data (see R28/R29), so the VENDOR_SITE_CODE rules (R2-R14) apply to it. Remove the entry to disable.",
+    "VENDOR_SITE_CODE": ["VENDOR_SITE"]
+  },
+
+  "derivation": {
+    "_comment": "compose_tnumber_from_site_id: when a rule yields only a numeric Site ID (e.g. 3133MTN/S -> 3133), compose TNUMBER as 'T' + Site ID (the convention stated in R3) if it passes the T-number format. A T-number found explicitly (R1 or a T-number pattern) always takes precedence over a composed one. priority_overrides: {\"R2\": 5} moves a rule (default priorities are 10, 20, 30... in the order above, reference look-ups first).",
+    "compose_tnumber_from_site_id": true,
+    "reference_rules_first": true,
+    "priority_overrides": {}
+  }
+}

@@ -1,26 +1,41 @@
 
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Activity, AlertCircle, ArrowRight, BarChart3, Check, CheckCircle2,
   ChevronDown, CircleHelp, Clock3, Database, FileCheck2, FileSpreadsheet,
-  FileText, FolderOpen, Layers3, LayoutDashboard, LockKeyhole, Network,
-  RefreshCw, ShieldCheck, Sparkles, UploadCloud, X, Zap, Landmark,
-  PanelLeftClose, PanelLeftOpen, SlidersHorizontal, Download
+  FileText, FolderOpen, Layers3, LayoutDashboard, ListChecks, LockKeyhole, Network,
+  RadioTower, RefreshCw, ShieldCheck, Sparkles, UploadCloud, X, Zap,
+  PanelLeftClose, PanelLeftOpen, SlidersHorizontal, Download, AlertTriangle, Loader2
 } from "lucide-react";
+import {
+  downloadOutput, getHealth, getJob, startProcessing, validateFiles
+} from "./api.js";
 
+const CANNOT = "cannot be derived";
+
+// Backend stages (job.stage) mapped onto the four pipeline cards.
 const pipeline = [
-  ["Validate files", "Confirm file types and expected columns", FileCheck2],
-  ["Derive T-numbers", "Apply the configured matching rules", Network],
-  ["Map site details", "Enrich records from reference datasets", Layers3],
-  ["Build master database", "Prepare output and exception summaries", Database]
+  ["Validate files", "Check file types, worksheets, headers and columns", FileCheck2, ["validate"]],
+  ["Load rules", "Apply the approved backend rule configuration", ListChecks, ["load_rules"]],
+  ["Derive T-number & Site ID", "Apply reference look-ups and pattern rules", Network, ["derive"]],
+  ["Build master database", "Generate the master workbook and reports", Database, ["build_outputs"]]
 ];
+
+const ROLE_LABELS = {
+  source: "Source file",
+  bts: "BTS Site Report Schedule",
+  ops: "Operational Site List Summary",
+  latest_payment: "Latest Payment Data"
+};
 
 const prettySize = (n) =>
   n < 1024 * 1024
     ? `${Math.max(1, Math.round(n / 1024))} KB`
     : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
-function UploadCard({ title, subtitle, multiple, files, onChange }) {
+const fmt = (n) => (typeof n === "number" ? n.toLocaleString() : "—");
+
+function UploadCard({ title, subtitle, multiple, files, onChange, tag, tagClass, dropTitle, dropHint }) {
   const ref = useRef(null);
 
   const add = (list) => {
@@ -37,9 +52,7 @@ function UploadCard({ title, subtitle, multiple, files, onChange }) {
           <h3>{title}</h3>
           <p>{subtitle}</p>
         </div>
-        <span className={`tag ${multiple ? "tag-blue" : "tag-purple"}`}>
-          {multiple ? "SUPPORTING" : "REQUIRED"}
-        </span>
+        <span className={`tag ${tagClass}`}>{tag}</span>
       </div>
 
       <div
@@ -62,7 +75,7 @@ function UploadCard({ title, subtitle, multiple, files, onChange }) {
           type="file"
           hidden
           multiple={multiple}
-          accept={multiple ? ".xlsx,.xls,.csv,.pdf" : ".xlsx,.xls,.csv"}
+          accept=".xlsx,.xls,.csv"
           onChange={(e) => {
             add(e.target.files);
             e.target.value = "";
@@ -72,18 +85,10 @@ function UploadCard({ title, subtitle, multiple, files, onChange }) {
         <div className="cloud"><UploadCloud size={23} /></div>
 
         <div className="drop-copy">
-          <strong>
-            {multiple
-              ? "Upload all the relevant files"
-              : "Upload the base source file"}
-          </strong>
-          <span>
-            {multiple
-              ? "Choose multiple files or drag them here"
-              : "Choose one Excel or CSV file"}
-          </span>
+          <strong>{dropTitle}</strong>
+          <span>{dropHint}</span>
           <small>
-            XLSX · XLS · CSV{multiple ? " · PDF" : ""} <i>•</i> 200 MB per file
+            XLSX · XLS · CSV <i>•</i> 200 MB per file
           </small>
         </div>
 
@@ -133,73 +138,172 @@ function Metric({ icon: Icon, label, value, caption, color }) {
   );
 }
 
+function MessageList({ kind, title, items = [] }) {
+  return (
+    <div className={`notice ${kind === "error" ? "is-error" : ""}`}>
+      {kind === "error" ? <AlertCircle size={17} /> : <AlertTriangle size={17} />}
+      <span>
+        <b>{title}</b>
+        {items.length > 0 && (
+          <ul className="message-list">
+            {items.map((m, i) => <li key={i}>{m}</li>)}
+          </ul>
+        )}
+      </span>
+    </div>
+  );
+}
+
 export default function App() {
-  const [base, setBase] = useState([]);
+  const [source, setSource] = useState([]);
   const [support, setSupport] = useState([]);
   const [collapsed, setCollapsed] = useState(false);
   const [format, setFormat] = useState("xlsx");
-  const [retain, setRetain] = useState(true);
-  const [synthetic, setSynthetic] = useState(true);
   const [strict, setStrict] = useState(false);
-  const [status, setStatus] = useState("idle");
   const [notice, setNotice] = useState("");
-  const [runAt, setRunAt] = useState("");
+  const [apiOnline, setApiOnline] = useState(null);
+  const [validation, setValidation] = useState(null);
+  const [requestError, setRequestError] = useState(null);
+  const [busy, setBusy] = useState("");
+  const [job, setJob] = useState(null);
+  const pollRef = useRef(null);
 
-  const total = base.length + support.length;
-  const bytes = [...base, ...support].reduce((a, f) => a + f.size, 0);
+  const total = source.length + support.length;
+  const bytes = [...source, ...support].reduce((a, f) => a + f.size, 0);
+  const running = job && (job.status === "queued" || job.status === "running");
+  const completed = job?.status === "completed";
+  const failed = job?.status === "failed";
+  const metrics = completed ? job.metrics : null;
+
+  const checkHealth = () =>
+    getHealth().then(() => setApiOnline(true)).catch(() => setApiOnline(false));
+
+  useEffect(() => {
+    checkHealth();
+    return () => clearInterval(pollRef.current);
+  }, []);
+
+  // Any change to the selected files invalidates earlier validation and results.
+  const changeFiles = (setter) => (files) => {
+    setter(files);
+    setValidation(null);
+    setRequestError(null);
+    if (!running) setJob(null);
+  };
 
   const reset = () => {
-    setStatus("idle");
+    clearInterval(pollRef.current);
+    setValidation(null);
+    setRequestError(null);
+    setJob(null);
     setNotice("");
-    setRunAt("");
   };
 
-  const validate = () => {
-    if (!base.length) {
-      setNotice("Please add the base source file first.");
+  const localCheck = () => {
+    // Only the source file is mandatory; supporting files are optional reference data.
+    if (!source.length) return "Please add the source file first.";
+    return "";
+  };
+
+  const failRequest = (err) => {
+    if (err instanceof TypeError) {
+      setApiOnline(false);
+      setRequestError({ message: "The processing backend is not reachable. Start the FastAPI server and try again.", details: [] });
+    } else {
+      setRequestError({ message: err.message, details: err.details || [] });
+    }
+  };
+
+  const validate = async () => {
+    const problem = localCheck();
+    if (problem) return setNotice(problem);
+    setNotice("");
+    setRequestError(null);
+    setBusy("validate");
+    try {
+      const res = await validateFiles({ source, support });
+      setApiOnline(true);
+      setValidation(res);
+    } catch (err) {
+      failRequest(err);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const poll = (jobId) => {
+    clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const j = await getJob(jobId);
+        setJob(j);
+        if (j.status === "completed" || j.status === "failed") {
+          clearInterval(pollRef.current);
+          if (j.validation) setValidation(j.validation);
+        }
+      } catch (err) {
+        clearInterval(pollRef.current);
+        failRequest(err);
+      }
+    }, 700);
+  };
+
+  const run = async () => {
+    const problem = localCheck();
+    if (problem) return setNotice(problem);
+    setNotice("");
+    setRequestError(null);
+    setBusy("process");
+    try {
+      const res = await startProcessing(
+        { source, support },
+        { strict_matching: strict, output_format: format }
+      );
+      setApiOnline(true);
+      setJob({ job_id: res.job_id, status: res.status, stage: "queued", progress: 0 });
+      poll(res.job_id);
+    } catch (err) {
+      failRequest(err);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const download = async (kind) => {
+    if (!completed) {
+      setNotice("Outputs become available after a processing run completes successfully.");
       return;
     }
-    if (!support.length) {
-      setNotice("Please add at least one supporting reference file.");
-      return;
+    try {
+      await downloadOutput(job.job_id, kind);
+    } catch (err) {
+      failRequest(err);
     }
-
-    setStatus("demo");
-    setRunAt(new Date().toLocaleString());
-    setNotice(
-      "Your file selection is ready. This interface is a prototype; the actual data-processing engine is not connected yet."
-    );
   };
 
-  const download = () => {
-    const summary = {
-      application:
-        "KPMG - Telecom Solution - Network cost Assurance and Optimisation",
-      createdAt: new Date().toISOString(),
-      baseFiles: base.map((f) => ({ name: f.name, size: f.size })),
-      supportingFiles: support.map((f) => ({
-        name: f.name,
-        size: f.size
-      })),
-      settings: {
-        format,
-        retainAllRows: retain,
-        syntheticTestValues: synthetic,
-        strictValidation: strict
-      },
-      note: "Configuration summary only; no source data has been processed."
-    };
+  // Role detected by the backend for each uploaded file (after validation).
+  const fileInfo = (name) => validation?.files?.find((f) => f.name === name);
 
-    const blob = new Blob([JSON.stringify(summary, null, 2)], {
-      type: "application/json"
-    });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "telecom-run-summary.json";
-    a.click();
-    URL.revokeObjectURL(url);
+  const stageState = (i) => {
+    if (!job) return "pending";
+    if (completed) return "done";
+    const current = pipeline.findIndex(([, , , stages]) => stages.includes(job.stage));
+    if (failed) return i < Math.max(current, 0) ? "done" : i === Math.max(current, 0) ? "failed" : "pending";
+    if (current < 0) return "pending";
+    return i < current ? "done" : i === current ? "active" : "pending";
   };
+
+  const statusText = completed
+    ? "Processing complete"
+    : failed
+      ? "Processing failed"
+      : running
+        ? "Processing…"
+        : validation?.valid
+          ? "Files validated"
+          : "Awaiting input";
+
+  const confirmations = (job?.validation?.rules || validation?.rules)?.requires_confirmation || [];
 
   return (
     <div className={`layout ${collapsed ? "collapsed" : ""}`}>
@@ -230,26 +334,22 @@ export default function App() {
           <button
             className="nav-link"
             title="Master database"
-            onClick={() =>
-              setNotice("Master database output will appear here when the processing engine is connected.")
-            }
+            onClick={() => download("master")}
           >
             <Database size={18} /><span>Master database</span>
             <span className="nav-count">01</span>
           </button>
           <button
             className="nav-link"
-            onClick={() =>
-              setNotice("Mapping review will be available when data processing is connected.")
-            }
+            title="Mapping review"
+            onClick={() => download("mapping")}
           >
             <Network size={18} /><span>Mapping review</span>
           </button>
           <button
             className="nav-link"
-            onClick={() =>
-              setNotice("Exception reporting will be available when data processing is connected.")
-            }
+            title="Exceptions & review"
+            onClick={() => download("exceptions")}
           >
             <FileCheck2 size={18} /><span>Exceptions &amp; review</span>
           </button>
@@ -259,7 +359,7 @@ export default function App() {
         <div className="workspace-label">RUN CONFIGURATION</div>
 
         <div className="side-control">
-          <label htmlFor="format">Output format</label>
+          <label htmlFor="format">Report format</label>
           <div className="select-box">
             <select
               id="format"
@@ -274,28 +374,12 @@ export default function App() {
         </div>
 
         <div className="switch-list">
-          <label className="switch-row">
-            <input
-              type="checkbox"
-              checked={retain}
-              onChange={(e) => setRetain(e.target.checked)}
-            />
+          <label className="switch-row" title="Every source row is always kept in the master database">
+            <input type="checkbox" checked readOnly disabled />
             <span className="switch-ui" />
             <span className="switch-text">
               <b>Retain all source rows</b>
-              <small>Keep every payment record</small>
-            </span>
-          </label>
-          <label className="switch-row">
-            <input
-              type="checkbox"
-              checked={synthetic}
-              onChange={(e) => setSynthetic(e.target.checked)}
-            />
-            <span className="switch-ui" />
-            <span className="switch-text">
-              <b>Synthetic test values</b>
-              <small>Randomise designated fields</small>
+              <small>Always on · no record is dropped</small>
             </span>
           </label>
           <label className="switch-row">
@@ -307,7 +391,7 @@ export default function App() {
             <span className="switch-ui" />
             <span className="switch-text">
               <b>Strict matching</b>
-              <small>Flag ambiguous matches</small>
+              <small>Withhold conflicting values</small>
             </span>
           </label>
         </div>
@@ -317,11 +401,13 @@ export default function App() {
             <div className="security-icon"><LockKeyhole size={16} /></div>
             <div>
               <b>Controlled data handling</b>
-              <p>Use only in your approved company environment.</p>
+              <p>Files are processed locally and held in memory only.</p>
             </div>
           </div>
           <div className="side-version">
-            <span className="online-dot" /> Local prototype <span>v1.1</span>
+            <span className={`online-dot ${apiOnline === false ? "is-offline" : ""}`} />
+            {apiOnline === null ? "Checking backend" : apiOnline ? "Backend online" : "Backend offline"}
+            <span>v1.1</span>
           </div>
         </div>
       </aside>
@@ -338,7 +424,7 @@ export default function App() {
               className="help-btn"
               title="Help"
               onClick={() =>
-                setNotice("Upload the base payment source, then add the BTS Site Report Schedule, Operational Site List Summary and other approved reference files.")
+                setNotice("Upload the source file you want to process. Optionally add supporting reference files (for example a BTS Site Report Schedule or Operational Site List Summary); they are recognised from their columns. The approved T-number rules are built into the backend. Validate the files, then run the derivation to produce TNUMBER and SITE ID.")
               }
             >
               <CircleHelp size={18} />
@@ -372,7 +458,7 @@ export default function App() {
             <div className="float-icon float-one"><FileSpreadsheet size={17} /></div>
             <div className="float-icon float-two"><Zap size={17} /></div>
             <div className="float-icon float-three"><Database size={17} /></div>
-            <div className="float-icon float-four"><Landmark size={17} /></div>
+            <div className="float-icon float-four"><RadioTower size={17} /></div>
           </div>
         </section>
 
@@ -380,7 +466,7 @@ export default function App() {
           <div>
             <div className="step-label">01 / INPUT</div>
             <h2>Source file upload</h2>
-            <p>Start with the payment source, then add the relevant reference files.</p>
+            <p>Add the source file to process, then any supporting reference files you have.</p>
           </div>
           <div className="selection-pill">
             <FolderOpen size={16} /><b>{total}</b> files selected
@@ -389,18 +475,26 @@ export default function App() {
 
         <section className="upload-grid">
           <UploadCard
-            title="Base source file"
-            subtitle="Primary payment report or source extract"
+            title="Source File"
+            subtitle="The dataset to process; every row is kept in the output"
             multiple={false}
-            files={base}
-            onChange={setBase}
+            files={source}
+            onChange={changeFiles(setSource)}
+            tag="REQUIRED"
+            tagClass="tag-purple"
+            dropTitle="Upload the source file"
+            dropHint="Choose one Excel or CSV file (any name)"
           />
           <UploadCard
-            title="Supporting data files"
-            subtitle="Site schedule, operational list and additional references"
+            title="Supporting Data File(s)"
+            subtitle="Optional reference data, recognised from its columns"
             multiple
             files={support}
-            onChange={setSupport}
+            onChange={changeFiles(setSupport)}
+            tag="OPTIONAL"
+            tagClass="tag-blue"
+            dropTitle="Upload any supporting files"
+            dropHint="Choose zero, one or several files, or drag them here"
           />
         </section>
 
@@ -409,12 +503,12 @@ export default function App() {
             <div className="panel-head">
               <div>
                 <h3><FolderOpen size={17} /> File inventory</h3>
-                <p>Review selected files before running validation.</p>
+                <p>Review selected files. Roles are detected by the backend during validation.</p>
               </div>
               <button
                 className="link-button"
                 onClick={() => {
-                  setBase([]);
+                  setSource([]);
                   setSupport([]);
                   reset();
                 }}
@@ -432,23 +526,32 @@ export default function App() {
             ) : (
               <div className="inventory-list">
                 {[
-                  ...base.map((f) => ({ ...f, kind: "Base source" })),
-                  ...support.map((f) => ({ ...f, kind: "Supporting file" }))
-                ].map((f, i) => (
-                  <div className="inventory-row" key={`${f.name}-${i}`}>
-                    <div className="mini-file"><FileSpreadsheet size={16} /></div>
-                    <div className="inventory-name">
-                      <b title={f.name}>{f.name}</b>
-                      <span>{f.kind} · {prettySize(f.size)}</span>
+                  ...source.map((f) => ({ file: f, kind: "Source file" })),
+                  ...support.map((f) => ({ file: f, kind: "Supporting file" }))
+                ].map(({ file, kind }, i) => {
+                  const info = fileInfo(file.name);
+                  const role = info?.role
+                    ? info.role.split(", ").map((r) => ROLE_LABELS[r] || r).join(", ")
+                    : null;
+                  return (
+                    <div className="inventory-row" key={`${file.name}-${i}`}>
+                      <div className="mini-file"><FileSpreadsheet size={16} /></div>
+                      <div className="inventory-name">
+                        <b title={file.name}>{file.name}</b>
+                        <span>{kind} · {prettySize(file.size)}{role ? ` · ${role}` : ""}</span>
+                      </div>
+                      {!info && <span className="added"><Check size={12} /> Added</span>}
+                      {info?.status === "ok" && <span className="added"><Check size={12} /> Recognised</span>}
+                      {info?.status === "ignored" && <span className="added is-warn"><AlertTriangle size={12} /> Not used</span>}
+                      {info?.status === "error" && <span className="added is-error"><AlertCircle size={12} /> Error</span>}
                     </div>
-                    <span className="added"><Check size={12} /> Added</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
             <div className="inventory-foot">
-              <span><LockKeyhole size={12} /> Selection is shown in this browser session</span>
+              <span><LockKeyhole size={12} /> Files are sent only to the local backend</span>
               <b>{(bytes / 1024 / 1024).toFixed(2)} MB</b>
             </div>
           </div>
@@ -464,12 +567,12 @@ export default function App() {
 
             <div className="readiness">
               <div className="readiness-row">
-                <span className={base.length ? "ready-check" : "number-check"}>
-                  {base.length ? <Check size={13} /> : "1"}
+                <span className={source.length ? "ready-check" : "number-check"}>
+                  {source.length ? <Check size={13} /> : "1"}
                 </span>
                 <div>
-                  <b>Base source file</b>
-                  <small>{base.length ? "File selected" : "Waiting for upload"}</small>
+                  <b>Source file</b>
+                  <small>{source.length ? "File selected" : "Waiting for upload"}</small>
                 </div>
               </div>
               <div className="readiness-row">
@@ -477,33 +580,62 @@ export default function App() {
                   {support.length ? <Check size={13} /> : "2"}
                 </span>
                 <div>
-                  <b>Supporting references</b>
+                  <b>Supporting data (optional)</b>
                   <small>
-                    {support.length ? `${support.length} file(s) selected` : "Waiting for upload"}
+                    {support.length ? `${support.length} file(s) selected` : "None selected · reference look-ups will be skipped"}
                   </small>
                 </div>
               </div>
               <div className="readiness-row">
-                <span className={status === "demo" ? "ready-check" : "number-check"}>
-                  {status === "demo" ? <Check size={13} /> : "3"}
+                <span className={validation?.valid ? "ready-check" : "number-check"}>
+                  {validation?.valid ? <Check size={13} /> : "3"}
                 </span>
                 <div>
-                  <b>Processing engine</b>
+                  <b>Validation</b>
                   <small>
-                    {status === "demo" ? "Demo validation only" : "Backend connection required"}
+                    {validation
+                      ? validation.valid
+                        ? `Passed · ${fmt(validation.source_rows)} source rows`
+                        : `${validation.errors.length} issue(s) to resolve`
+                      : apiOnline === false
+                        ? "Backend offline"
+                        : "Not run yet"}
                   </small>
                 </div>
               </div>
             </div>
 
-            <button className="button button-primary run-btn" onClick={validate}>
-              <Zap size={16} /> Validate upload setup <ArrowRight size={15} />
+            <button
+              className="button button-outline full-width"
+              onClick={validate}
+              disabled={!!busy || running}
+            >
+              {busy === "validate" ? <Loader2 size={15} className="spin" /> : <FileCheck2 size={15} />}
+              Validate files
             </button>
-            <button className="reset-btn" onClick={reset}>
+            <button
+              className="button button-primary run-btn"
+              onClick={run}
+              disabled={!!busy || running}
+            >
+              {running || busy === "process" ? <Loader2 size={16} className="spin" /> : <Zap size={16} />}
+              {running ? "Processing…" : "Run T-number & Site ID derivation"} <ArrowRight size={15} />
+            </button>
+            <button className="reset-btn" onClick={reset} disabled={running}>
               <RefreshCw size={13} /> Reset status
             </button>
           </div>
         </section>
+
+        {requestError && (
+          <MessageList kind="error" title={requestError.message} items={requestError.details} />
+        )}
+        {validation?.errors?.length > 0 && (
+          <MessageList kind="error" title="Validation errors" items={validation.errors} />
+        )}
+        {validation?.warnings?.length > 0 && (
+          <MessageList kind="warn" title="Validation warnings" items={validation.warnings} />
+        )}
 
         <div className="section-title overview-title">
           <div>
@@ -511,39 +643,53 @@ export default function App() {
             <h2>Processing overview</h2>
             <p>Summary metrics and pipeline status for the current run.</p>
           </div>
-          <div className={`status-pill ${status === "demo" ? "is-done" : ""}`}>
-            <i />{status === "demo" ? "Demo validation complete" : "Awaiting input"}
+          <div className={`status-pill ${completed ? "is-done" : ""} ${failed ? "is-failed" : ""}`}>
+            <i />{statusText}
           </div>
         </div>
 
-        <section className="metrics">
-          <Metric
-            icon={FileText}
-            label="Files selected"
-            value={total}
-            caption={`${base.length} base · ${support.length} supporting`}
-            color="blue"
-          />
+        <section className="metrics six">
           <Metric
             icon={BarChart3}
-            label="Source rows"
-            value="—"
-            caption="Available after processing"
-            color="purple"
+            label="Total input rows"
+            value={fmt(metrics?.input_rows)}
+            caption={metrics ? `${fmt(metrics.output_rows)} rows in master output` : "Available after processing"}
+            color="blue"
           />
           <Metric
             icon={Network}
             label="T-numbers derived"
-            value="—"
-            caption="Rule engine not connected"
+            value={fmt(metrics?.tnumber_derived)}
+            caption={metrics ? `${metrics.tnumber_match_rate_pct}% of records` : "Available after processing"}
+            color="green"
+          />
+          <Metric
+            icon={RadioTower}
+            label="Site IDs derived"
+            value={fmt(metrics?.site_id_derived)}
+            caption={metrics ? `${metrics.site_id_match_rate_pct}% of records` : "Available after processing"}
             color="green"
           />
           <Metric
             icon={AlertCircle}
-            label="Exceptions"
-            value="—"
-            caption="Available after validation"
+            label="Unresolved T-numbers"
+            value={fmt(metrics?.tnumber_unresolved)}
+            caption={metrics ? `Shown as “${CANNOT}”` : "Available after processing"}
             color="orange"
+          />
+          <Metric
+            icon={AlertCircle}
+            label="Unresolved Site IDs"
+            value={fmt(metrics?.site_id_unresolved)}
+            caption={metrics ? "Left blank and flagged" : "Available after processing"}
+            color="orange"
+          />
+          <Metric
+            icon={Layers3}
+            label="Conflicting mappings"
+            value={fmt(metrics?.conflicting_records)}
+            caption={metrics ? "Records flagged for review" : "Available after processing"}
+            color="purple"
           />
         </section>
 
@@ -551,30 +697,35 @@ export default function App() {
           <div className="panel-head">
             <div>
               <h3><Activity size={17} /> Automation pipeline</h3>
-              <p>Planned processing stages for generating the master database.</p>
+              <p>Processing stages for generating the master database.</p>
             </div>
-            <span className="progress-value">{status === "demo" ? "25%" : "0%"}</span>
+            <span className="progress-value">{job ? `${job.progress}%` : "0%"}</span>
           </div>
 
           <div className="progress-track">
-            <div style={{ width: status === "demo" ? "25%" : "0%" }} />
+            <div style={{ width: `${job ? job.progress : 0}%` }} />
           </div>
 
           <div className="pipeline-grid">
-            {pipeline.map(([name, desc, Icon], i) => (
-              <div className="pipeline-stage" key={name}>
-                <div className="stage-head">
-                  <div className="stage-icon"><Icon size={17} /></div>
-                  <span>0{i + 1}</span>
+            {pipeline.map(([name, desc, Icon], i) => {
+              const state = stageState(i);
+              return (
+                <div className={`pipeline-stage is-${state}`} key={name}>
+                  <div className="stage-head">
+                    <div className="stage-icon"><Icon size={17} /></div>
+                    <span>0{i + 1}</span>
+                  </div>
+                  <b>{name}</b>
+                  <p>{desc}</p>
+                  <small>
+                    {state === "done" && <><CheckCircle2 size={12} /> Complete</>}
+                    {state === "active" && <><Loader2 size={12} className="spin" /> In progress</>}
+                    {state === "failed" && <><AlertCircle size={12} /> Failed</>}
+                    {state === "pending" && <><Clock3 size={12} /> Pending</>}
+                  </small>
                 </div>
-                <b>{name}</b>
-                <p>{desc}</p>
-                <small>
-                  <Clock3 size={12} />
-                  {status === "demo" && i === 0 ? "UI check only" : "Backend pending"}
-                </small>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {notice && (
@@ -585,23 +736,102 @@ export default function App() {
             </div>
           )}
 
-          {status === "demo" && (
+          {failed && (
+            <MessageList
+              kind="error"
+              title={job.error || "Processing failed."}
+              items={job.validation?.errors || []}
+            />
+          )}
+
+          {completed && (
             <div className="download-summary">
               <div className="summary-check"><CheckCircle2 size={19} /></div>
               <div className="summary-copy">
-                <b>Configuration summary is ready</b>
-                <span>{runAt}. This is not a generated master database.</span>
+                <b>Master database generated</b>
+                <span>Completed {job.finished_at?.replace("T", " ")}. Download the outputs below.</span>
               </div>
-              <button className="button button-outline" onClick={download}>
-                <Download size={14} /> Download summary
-              </button>
+              <div className="download-actions">
+                <button className="button button-outline" onClick={() => download("master")}>
+                  <Download size={14} /> Master workbook
+                </button>
+                <button className="button button-outline" onClick={() => download("mapping")}>
+                  <Download size={14} /> Mapping summary
+                </button>
+                <button className="button button-outline" onClick={() => download("exceptions")}>
+                  <Download size={14} /> Exception report
+                </button>
+              </div>
             </div>
           )}
         </section>
 
+        {confirmations.length > 0 && (
+          <section className="panel results">
+            <div className="panel-head">
+              <div>
+                <h3><ListChecks size={17} /> Rules requiring business confirmation</h3>
+                <p>These rules were not executed. They are listed in the Rule Audit and Exceptions sheets.</p>
+              </div>
+            </div>
+            <ul className="message-list confirm-list">
+              {confirmations.map((r) => (
+                <li key={r.rule_id}><b>{r.rule_id}</b> · {r.reason}</li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {completed && job.preview?.length > 0 && (
+          <section className="panel results">
+            <div className="panel-head">
+              <div>
+                <h3><Database size={17} /> Results preview</h3>
+                <p>First {job.preview.length} of {fmt(metrics.input_rows)} records. The full output is in the master workbook.</p>
+              </div>
+            </div>
+            <div className="table-scroll">
+              <table className="results-table">
+                <thead>
+                  <tr>
+                    <th>Row</th>
+                    <th>Vendor Site Code</th>
+                    <th>VENDOR_SITE_CODE_ALT</th>
+                    <th>Candidate T-number(s)</th>
+                    <th>TNUMBER</th>
+                    <th>SITE ID</th>
+                    <th>T rule</th>
+                    <th>Site rule</th>
+                    <th>Status</th>
+                    <th>Conflict</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {job.preview.map((r) => (
+                    <tr key={r.row} className={r.conflict ? "is-conflict" : ""} title={r.exception_reason || ""}>
+                      <td>{r.row}</td>
+                      <td>{r.vendor_site_code}</td>
+                      <td>{r.vendor_site_code_alt}</td>
+                      <td>{r.candidate_tnumbers}</td>
+                      <td className={r.tnumber === CANNOT ? "muted" : "strong"}>{r.tnumber}</td>
+                      <td className={r.site_id ? "strong" : "muted"}>{r.site_id || "unresolved"}</td>
+                      <td>{r.tnumber_rule}</td>
+                      <td>{r.site_id_rule}</td>
+                      <td>{r.tnumber_status} / {r.site_id_status}</td>
+                      <td>{r.conflict ? "Y" : "N"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
         <footer>
           <span>© KPMG Assurance and Consulting Service LLP</span>
-          <span><LockKeyhole size={12} /> Prototype interface · Processing backend not connected</span>
+          <span>
+            <LockKeyhole size={12} /> Local processing · {apiOnline ? "Backend connected" : "Backend not connected"}
+          </span>
         </footer>
       </main>
     </div>
