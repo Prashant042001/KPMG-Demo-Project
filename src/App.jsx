@@ -1,66 +1,117 @@
-import React, { useMemo, useRef, useState } from "react";
+
+import React, { useRef, useState } from "react";
 import {
   Activity, AlertCircle, ArrowRight, BarChart3, Check, CheckCircle2,
-  ChevronDown, CircleHelp, Database, FileCheck2, FileSpreadsheet,
-  FileText, FolderUp, Gauge, Layers3, ListChecks, LockKeyhole,
-  RefreshCw, Settings2, ShieldCheck, Sparkles, UploadCloud, X,
-  Zap, Clock3, Download, Network, Landmark
+  ChevronDown, CircleHelp, Clock3, Database, FileCheck2, FileSpreadsheet,
+  FileText, FolderOpen, Layers3, LayoutDashboard, LockKeyhole, Network,
+  RefreshCw, ShieldCheck, Sparkles, UploadCloud, X, Zap, Landmark,
+  PanelLeftClose, PanelLeftOpen, SlidersHorizontal, Download
 } from "lucide-react";
 
-const stages = [
-  { title: "File validation", detail: "Check uploaded files and required columns", icon: FileCheck2 },
-  { title: "T-number derivation", detail: "Apply configured identification rules", icon: Network },
-  { title: "Site mapping & enrichment", detail: "Match site and vendor reference data", icon: Layers3 },
-  { title: "Master database generation", detail: "Build output and exception reports", icon: Database },
+const pipeline = [
+  ["Validate files", "Confirm file types and expected columns", FileCheck2],
+  ["Derive T-numbers", "Apply the configured matching rules", Network],
+  ["Map site details", "Enrich records from reference datasets", Layers3],
+  ["Build master database", "Prepare output and exception summaries", Database]
 ];
 
-function formatBytes(bytes) {
-  if (!bytes) return "0 KB";
-  const kb = bytes / 1024;
-  return kb > 1024 ? `${(kb / 1024).toFixed(1)} MB` : `${kb.toFixed(0)} KB`;
-}
+const prettySize = (n) =>
+  n < 1024 * 1024
+    ? `${Math.max(1, Math.round(n / 1024))} KB`
+    : `${(n / 1024 / 1024).toFixed(1)} MB`;
 
-function FileDrop({ title, subtitle, files, onFiles, multiple = false, accept = ".xlsx,.xls,.csv,.pdf" }) {
-  const inputRef = useRef(null);
-  const [dragging, setDragging] = useState(false);
+function UploadCard({ title, subtitle, multiple, files, onChange }) {
+  const ref = useRef(null);
 
-  function addFiles(fileList) {
-    const incoming = Array.from(fileList || []);
+  const add = (list) => {
+    const incoming = Array.from(list || []);
     if (!incoming.length) return;
-    onFiles(multiple ? [...files, ...incoming] : [incoming[0]]);
-  }
+    onChange(multiple ? [...files, ...incoming] : [incoming[0]]);
+  };
 
   return (
-    <div
-      className={`dropzone ${dragging ? "dragging" : ""}`}
-      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={(e) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); }}
-    >
-      <input
-        ref={inputRef}
-        type="file"
-        accept={accept}
-        multiple={multiple}
-        hidden
-        onChange={(e) => { addFiles(e.target.files); e.target.value = ""; }}
-      />
-      <div className="drop-icon"><UploadCloud size={22} /></div>
-      <div className="drop-copy">
-        <strong>{title}</strong>
-        <span>{subtitle}</span>
+    <div className="upload-card">
+      <div className="upload-heading">
+        <div className="file-icon"><FileSpreadsheet size={19} /></div>
+        <div className="grow">
+          <h3>{title}</h3>
+          <p>{subtitle}</p>
+        </div>
+        <span className={`tag ${multiple ? "tag-blue" : "tag-purple"}`}>
+          {multiple ? "SUPPORTING" : "REQUIRED"}
+        </span>
       </div>
-      <button className="btn btn-outline upload-btn" onClick={() => inputRef.current?.click()}>
-        Browse files
-      </button>
+
+      <div
+        className="dropzone"
+        onDragOver={(e) => {
+          e.preventDefault();
+          e.currentTarget.classList.add("is-over");
+        }}
+        onDragLeave={(e) =>
+          e.currentTarget.classList.remove("is-over")
+        }
+        onDrop={(e) => {
+          e.preventDefault();
+          e.currentTarget.classList.remove("is-over");
+          add(e.dataTransfer.files);
+        }}
+      >
+        <input
+          ref={ref}
+          type="file"
+          hidden
+          multiple={multiple}
+          accept={multiple ? ".xlsx,.xls,.csv,.pdf" : ".xlsx,.xls,.csv"}
+          onChange={(e) => {
+            add(e.target.files);
+            e.target.value = "";
+          }}
+        />
+
+        <div className="cloud"><UploadCloud size={23} /></div>
+
+        <div className="drop-copy">
+          <strong>
+            {multiple
+              ? "Upload all the relevant files"
+              : "Upload the base source file"}
+          </strong>
+          <span>
+            {multiple
+              ? "Choose multiple files or drag them here"
+              : "Choose one Excel or CSV file"}
+          </span>
+          <small>
+            XLSX · XLS · CSV{multiple ? " · PDF" : ""} <i>•</i> 200 MB per file
+          </small>
+        </div>
+
+        <button
+          type="button"
+          className="button button-outline"
+          onClick={() => ref.current?.click()}
+        >
+          Browse files <ArrowRight size={14} />
+        </button>
+      </div>
+
       {files.length > 0 && (
-        <div className="selected-files">
-          {files.map((file, i) => (
-            <div className="file-chip" key={`${file.name}-${i}`}>
-              <FileSpreadsheet size={15} />
-              <span title={file.name}>{file.name}</span>
-              <small>{formatBytes(file.size)}</small>
-              <button aria-label={`Remove ${file.name}`} onClick={() => onFiles(files.filter((_, idx) => idx !== i))}><X size={14} /></button>
+        <div className="picked-list">
+          {files.map((f, i) => (
+            <div className="picked" key={`${f.name}-${i}`}>
+              <FileText size={15} />
+              <span title={f.name}>{f.name}</span>
+              <small>{prettySize(f.size)}</small>
+              <button
+                type="button"
+                aria-label={`Remove ${f.name}`}
+                onClick={() =>
+                  onChange(files.filter((_, j) => i !== j))
+                }
+              >
+                <X size={14} />
+              </button>
             </div>
           ))}
         </div>
@@ -69,234 +120,489 @@ function FileDrop({ title, subtitle, files, onFiles, multiple = false, accept = 
   );
 }
 
-function Metric({ label, value, note, icon: Icon, tone }) {
+function Metric({ icon: Icon, label, value, caption, color }) {
   return (
-    <div className={`metric metric-${tone}`}>
-      <div className="metric-top">
+    <div className="metric">
+      <div className={`metric-icon ${color}`}><Icon size={19} /></div>
+      <div className="metric-text">
         <span>{label}</span>
-        <span className="metric-icon"><Icon size={18} /></span>
+        <strong>{value}</strong>
+        <small>{caption}</small>
       </div>
-      <div className="metric-value">{value}</div>
-      <div className="metric-note">{note}</div>
     </div>
   );
 }
 
 export default function App() {
-  const [baseFiles, setBaseFiles] = useState([]);
-  const [supportFiles, setSupportFiles] = useState([]);
-  const [outputFormat, setOutputFormat] = useState("xlsx");
-  const [retainRows, setRetainRows] = useState(true);
-  const [syntheticData, setSyntheticData] = useState(true);
-  const [strictValidation, setStrictValidation] = useState(false);
+  const [base, setBase] = useState([]);
+  const [support, setSupport] = useState([]);
+  const [collapsed, setCollapsed] = useState(false);
+  const [format, setFormat] = useState("xlsx");
+  const [retain, setRetain] = useState(true);
+  const [synthetic, setSynthetic] = useState(true);
+  const [strict, setStrict] = useState(false);
   const [status, setStatus] = useState("idle");
-  const [message, setMessage] = useState("");
-  const [completedStages, setCompletedStages] = useState([]);
-  const [runTime, setRunTime] = useState(null);
+  const [notice, setNotice] = useState("");
+  const [runAt, setRunAt] = useState("");
 
-  const totalFiles = baseFiles.length + supportFiles.length;
-  const canRun = baseFiles.length > 0 && totalFiles > 1 && status !== "processing";
-  const progress = status === "complete" ? 100 : status === "processing" ? 45 : 0;
+  const total = base.length + support.length;
+  const bytes = [...base, ...support].reduce((a, f) => a + f.size, 0);
 
-  const fileSummary = useMemo(() => ({
-    base: baseFiles.length,
-    supporting: supportFiles.length,
-    totalSize: [...baseFiles, ...supportFiles].reduce((sum, file) => sum + file.size, 0)
-  }), [baseFiles, supportFiles]);
-
-  function runDemo() {
-    if (!baseFiles.length) {
-      setMessage("Upload the base source file before starting.");
-      return;
-    }
-    if (!supportFiles.length) {
-      setMessage("Upload at least one relevant supporting file to continue.");
-      return;
-    }
-    setStatus("complete");
-    setCompletedStages(stages.map((s) => s.title));
-    setRunTime(new Date().toLocaleString());
-    setMessage("Demo run completed. This front end currently validates the upload selection only; connect a backend processing engine to generate the actual master database.");
-  }
-
-  function resetRun() {
+  const reset = () => {
     setStatus("idle");
-    setMessage("");
-    setCompletedStages([]);
-    setRunTime(null);
-  }
+    setNotice("");
+    setRunAt("");
+  };
 
-  function downloadRunSummary() {
+  const validate = () => {
+    if (!base.length) {
+      setNotice("Please add the base source file first.");
+      return;
+    }
+    if (!support.length) {
+      setNotice("Please add at least one supporting reference file.");
+      return;
+    }
+
+    setStatus("demo");
+    setRunAt(new Date().toLocaleString());
+    setNotice(
+      "Your file selection is ready. This interface is a prototype; the actual data-processing engine is not connected yet."
+    );
+  };
+
+  const download = () => {
     const summary = {
-      application: "KPMG - Telecom Solution - Network cost Assurance and Optimisation",
-      generatedAt: new Date().toISOString(),
-      baseFiles: baseFiles.map(({ name, size, type }) => ({ name, size, type })),
-      supportingFiles: supportFiles.map(({ name, size, type }) => ({ name, size, type })),
-      settings: { outputFormat, retainRows, syntheticData, strictValidation },
-      note: "Front-end prototype only. No source files were processed and no master database was generated."
+      application:
+        "KPMG - Telecom Solution - Network cost Assurance and Optimisation",
+      createdAt: new Date().toISOString(),
+      baseFiles: base.map((f) => ({ name: f.name, size: f.size })),
+      supportingFiles: support.map((f) => ({
+        name: f.name,
+        size: f.size
+      })),
+      settings: {
+        format,
+        retainAllRows: retain,
+        syntheticTestValues: synthetic,
+        strictValidation: strict
+      },
+      note: "Configuration summary only; no source data has been processed."
     };
-    const blob = new Blob([JSON.stringify(summary, null, 2)], { type: "application/json" });
+
+    const blob = new Blob([JSON.stringify(summary, null, 2)], {
+      type: "application/json"
+    });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = "telecom-tool-run-summary.json";
+    a.download = "telecom-run-summary.json";
     a.click();
     URL.revokeObjectURL(url);
-  }
+  };
 
   return (
-    <div className="app-shell">
+    <div className={`layout ${collapsed ? "collapsed" : ""}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">K</div>
-          <div>
-            <div className="brand-name">KPMG</div>
-            <div className="brand-sub">TELECOM SOLUTION</div>
+          <div className="brand-copy">
+            <b>KPMG</b>
+            <span>TELECOM SOLUTION</span>
           </div>
+          <button
+            type="button"
+            className="collapse-btn"
+            onClick={() => setCollapsed(!collapsed)}
+            title="Collapse sidebar"
+          >
+            {collapsed
+              ? <PanelLeftOpen size={17} />
+              : <PanelLeftClose size={17} />}
+          </button>
         </div>
 
-        <div className="sidebar-label">WORKSPACE</div>
-        <button className="nav-item active"><Gauge size={17} /> <span>Network cost assurance</span></button>
-        <button className="nav-item" onClick={() => setMessage("Mapping review will be available when the backend is connected.")}><Network size={17} /> <span>Mapping review</span><span className="nav-soon">SOON</span></button>
-        <button className="nav-item" onClick={() => setMessage("Exception reports will be available when the backend is connected.")}><ListChecks size={17} /> <span>Exception reports</span><span className="nav-soon">SOON</span></button>
+        <div className="workspace-label">WORKSPACE</div>
+        <nav className="nav">
+          <button className="nav-link active" title="Overview">
+            <LayoutDashboard size={18} /><span>Overview</span>
+          </button>
+          <button
+            className="nav-link"
+            title="Master database"
+            onClick={() =>
+              setNotice("Master database output will appear here when the processing engine is connected.")
+            }
+          >
+            <Database size={18} /><span>Master database</span>
+            <span className="nav-count">01</span>
+          </button>
+          <button
+            className="nav-link"
+            onClick={() =>
+              setNotice("Mapping review will be available when data processing is connected.")
+            }
+          >
+            <Network size={18} /><span>Mapping review</span>
+          </button>
+          <button
+            className="nav-link"
+            onClick={() =>
+              setNotice("Exception reporting will be available when data processing is connected.")
+            }
+          >
+            <FileCheck2 size={18} /><span>Exceptions &amp; review</span>
+          </button>
+        </nav>
 
-        <div className="sidebar-divider" />
-        <div className="sidebar-label">RUN CONFIGURATION</div>
-        <div className="config-block">
+        <div className="side-rule" />
+        <div className="workspace-label">RUN CONFIGURATION</div>
+
+        <div className="side-control">
           <label htmlFor="format">Output format</label>
-          <div className="select-wrap">
-            <select id="format" value={outputFormat} onChange={(e) => setOutputFormat(e.target.value)}>
+          <div className="select-box">
+            <select
+              id="format"
+              value={format}
+              onChange={(e) => setFormat(e.target.value)}
+            >
               <option value="xlsx">Excel workbook (.xlsx)</option>
               <option value="csv">CSV file (.csv)</option>
             </select>
-            <ChevronDown size={15} />
+            <ChevronDown size={14} />
           </div>
         </div>
-        <div className="config-check">
-          <label><input type="checkbox" checked={retainRows} onChange={(e) => setRetainRows(e.target.checked)} /> <span>Retain all source rows</span></label>
-          <p>Do not remove payment records when a site ID cannot be derived.</p>
-        </div>
-        <div className="config-check">
-          <label><input type="checkbox" checked={syntheticData} onChange={(e) => setSyntheticData(e.target.checked)} /> <span>Use synthetic test values</span></label>
-          <p>For fields designated for anonymisation/testing only.</p>
-        </div>
-        <div className="config-check">
-          <label><input type="checkbox" checked={strictValidation} onChange={(e) => setStrictValidation(e.target.checked)} /> <span>Strict validation</span></label>
-          <p>Flag ambiguous matches for review instead of silently selecting one.</p>
+
+        <div className="switch-list">
+          <label className="switch-row">
+            <input
+              type="checkbox"
+              checked={retain}
+              onChange={(e) => setRetain(e.target.checked)}
+            />
+            <span className="switch-ui" />
+            <span className="switch-text">
+              <b>Retain all source rows</b>
+              <small>Keep every payment record</small>
+            </span>
+          </label>
+          <label className="switch-row">
+            <input
+              type="checkbox"
+              checked={synthetic}
+              onChange={(e) => setSynthetic(e.target.checked)}
+            />
+            <span className="switch-ui" />
+            <span className="switch-text">
+              <b>Synthetic test values</b>
+              <small>Randomise designated fields</small>
+            </span>
+          </label>
+          <label className="switch-row">
+            <input
+              type="checkbox"
+              checked={strict}
+              onChange={(e) => setStrict(e.target.checked)}
+            />
+            <span className="switch-ui" />
+            <span className="switch-text">
+              <b>Strict matching</b>
+              <small>Flag ambiguous matches</small>
+            </span>
+          </label>
         </div>
 
-        <div className="sidebar-spacer" />
-        <div className="privacy-card">
-          <div className="privacy-icon"><LockKeyhole size={17} /></div>
-          <div><strong>Designed for controlled data handling</strong><p>Connect and run the processing engine in your approved environment.</p></div>
+        <div className="side-bottom">
+          <div className="security-card">
+            <div className="security-icon"><LockKeyhole size={16} /></div>
+            <div>
+              <b>Controlled data handling</b>
+              <p>Use only in your approved company environment.</p>
+            </div>
+          </div>
+          <div className="side-version">
+            <span className="online-dot" /> Local prototype <span>v1.1</span>
+          </div>
         </div>
-        <div className="sidebar-footer"><span className="status-dot" /> Front-end prototype <span>v1.0</span></div>
       </aside>
 
-      <main className="main-content">
+      <main className="main">
         <header className="topbar">
-          <div className="breadcrumb"><span>Workspace</span><span>/</span><strong>Network cost assurance</strong></div>
-          <div className="topbar-right"><span className="environment"><span className="status-dot" /> Local environment</span><button className="icon-button" title="Help" onClick={() => setMessage("Upload a base payment/source file and supporting reference files. The processing engine still needs to be connected.")}><CircleHelp size={18} /></button></div>
+          <div className="crumb">
+            <span>Workspace</span><b>/</b>
+            <strong>Network cost assurance</strong>
+          </div>
+          <div className="top-actions">
+            <span className="local-pill"><i />Local environment</span>
+            <button
+              className="help-btn"
+              title="Help"
+              onClick={() =>
+                setNotice("Upload the base payment source, then add the BTS Site Report Schedule, Operational Site List Summary and other approved reference files.")
+              }
+            >
+              <CircleHelp size={18} />
+            </button>
+            <div className="avatar">TS</div>
+          </div>
         </header>
 
         <section className="hero">
-          <div className="hero-copy">
-            <div className="eyebrow"><Sparkles size={13} /> TELECOM DATA AUTOMATION</div>
-            <h1>KPMG - Telecom Solution -<br /><span>Network cost Assurance and Optimisation</span></h1>
-            <p>Consolidate payment, site and reference data into a structured master database — with rule-based T-number derivation, site mapping and validation.</p>
-            <div className="hero-tags"><span><ShieldCheck size={14} /> Rule-based processing</span><span><Database size={14} /> Master database output</span><span><Activity size={14} /> Exception visibility</span></div>
+          <div className="hero-content">
+            <div className="eyebrow">
+              <Sparkles size={13} /> TELECOM DATA AUTOMATION
+            </div>
+            <h1>KPMG - Telecom Solution</h1>
+            <h2>Network cost Assurance and Optimisation</h2>
+            <p>
+              Bring payment and site reference data together in one structured,
+              traceable master database.
+            </p>
+            <div className="hero-pills">
+              <span><ShieldCheck size={14} /> Rule-led processing</span>
+              <span><Database size={14} /> Unified data</span>
+              <span><Activity size={14} /> Clear exceptions</span>
+            </div>
           </div>
-          <div className="hero-art" aria-hidden="true">
-            <div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" />
-            <div className="art-core"><Network size={36} /></div>
-            <div className="art-node node-a"><FileSpreadsheet size={17} /></div>
-            <div className="art-node node-b"><Zap size={17} /></div>
-            <div className="art-node node-c"><Database size={17} /></div>
-            <div className="art-node node-d"><Landmark size={17} /></div>
+
+          <div className="hero-visual">
+            <div className="ring ring-a" />
+            <div className="ring ring-b" />
+            <div className="hero-center"><Network size={32} /></div>
+            <div className="float-icon float-one"><FileSpreadsheet size={17} /></div>
+            <div className="float-icon float-two"><Zap size={17} /></div>
+            <div className="float-icon float-three"><Database size={17} /></div>
+            <div className="float-icon float-four"><Landmark size={17} /></div>
           </div>
         </section>
 
-        <div className="section-heading">
-          <div><div className="section-kicker">STEP 01</div><h2>Upload source files</h2><p>Choose the base source file and the relevant supporting files for mapping and enrichment.</p></div>
-          <div className="file-count"><FolderUp size={16} /><strong>{totalFiles}</strong> files selected</div>
+        <div className="section-title">
+          <div>
+            <div className="step-label">01 / INPUT</div>
+            <h2>Source file upload</h2>
+            <p>Start with the payment source, then add the relevant reference files.</p>
+          </div>
+          <div className="selection-pill">
+            <FolderOpen size={16} /><b>{total}</b> files selected
+          </div>
         </div>
 
         <section className="upload-grid">
-          <div className="panel upload-panel">
-            <div className="panel-heading"><div className="panel-icon purple"><FileSpreadsheet size={19} /></div><div><h3>Base source file</h3><p>Required · Payment report / source extract</p></div><span className="required-badge">REQUIRED</span></div>
-            <FileDrop title="Upload the base source file" subtitle="Select one Excel or CSV file" files={baseFiles} onFiles={setBaseFiles} accept=".xlsx,.xls,.csv" />
-          </div>
-          <div className="panel upload-panel">
-            <div className="panel-heading"><div className="panel-icon blue"><Layers3 size={19} /></div><div><h3>Supporting data files</h3><p>Site schedule, operational list and other references</p></div><span className="optional-badge">MULTIPLE</span></div>
-            <FileDrop title="Upload all the relevant files" subtitle="Select or drag multiple Excel, CSV or PDF files" files={supportFiles} onFiles={setSupportFiles} multiple />
-          </div>
+          <UploadCard
+            title="Base source file"
+            subtitle="Primary payment report or source extract"
+            multiple={false}
+            files={base}
+            onChange={setBase}
+          />
+          <UploadCard
+            title="Supporting data files"
+            subtitle="Site schedule, operational list and additional references"
+            multiple
+            files={support}
+            onChange={setSupport}
+          />
         </section>
 
-        <section className="content-grid">
-          <div className="panel inventory-panel">
-            <div className="panel-title-row"><div><h3><FileText size={18} /> File inventory</h3><p>Review the files selected for this run.</p></div><button className="text-button" onClick={() => { setBaseFiles([]); setSupportFiles([]); resetRun(); }}>Clear all</button></div>
-            {totalFiles === 0 ? (
-              <div className="empty-state"><div className="empty-icon"><FolderUp size={24} /></div><strong>No files uploaded yet</strong><span>Your selected files will appear here.</span></div>
+        <section className="lower-grid">
+          <div className="panel inventory">
+            <div className="panel-head">
+              <div>
+                <h3><FolderOpen size={17} /> File inventory</h3>
+                <p>Review selected files before running validation.</p>
+              </div>
+              <button
+                className="link-button"
+                onClick={() => {
+                  setBase([]);
+                  setSupport([]);
+                  reset();
+                }}
+              >
+                Clear all
+              </button>
+            </div>
+
+            {total === 0 ? (
+              <div className="empty">
+                <div className="empty-folder"><FolderOpen size={23} /></div>
+                <b>No files selected</b>
+                <span>Uploaded files will be listed here.</span>
+              </div>
             ) : (
               <div className="inventory-list">
-                {[...baseFiles.map(f => ({...f, kind:"Base source"})), ...supportFiles.map(f => ({...f, kind:"Supporting"}))].map((file, idx) => (
-                  <div className="inventory-row" key={`${file.name}-${idx}`}>
-                    <div className="file-type-icon"><FileSpreadsheet size={17} /></div>
-                    <div className="inventory-name"><strong title={file.name}>{file.name}</strong><span>{file.kind} · {formatBytes(file.size)}</span></div>
-                    <span className="file-ready"><Check size={13} /> Added</span>
+                {[
+                  ...base.map((f) => ({ ...f, kind: "Base source" })),
+                  ...support.map((f) => ({ ...f, kind: "Supporting file" }))
+                ].map((f, i) => (
+                  <div className="inventory-row" key={`${f.name}-${i}`}>
+                    <div className="mini-file"><FileSpreadsheet size={16} /></div>
+                    <div className="inventory-name">
+                      <b title={f.name}>{f.name}</b>
+                      <span>{f.kind} · {prettySize(f.size)}</span>
+                    </div>
+                    <span className="added"><Check size={12} /> Added</span>
                   </div>
                 ))}
               </div>
             )}
-            <div className="inventory-foot"><span><LockKeyhole size={13} /> File selection shown locally in this page</span><span>{(fileSummary.totalSize / (1024 * 1024)).toFixed(2)} MB total</span></div>
+
+            <div className="inventory-foot">
+              <span><LockKeyhole size={12} /> Selection is shown in this browser session</span>
+              <b>{(bytes / 1024 / 1024).toFixed(2)} MB</b>
+            </div>
           </div>
 
-          <div className="panel run-panel">
-            <div className="panel-title-row"><div><h3><Settings2 size={18} /> Processing controls</h3><p>Review before starting the run.</p></div><span className="step-pill">STEP 02</span></div>
-            <div className="run-checklist">
-              <div className="checklist-row"><span className={`check-circle ${baseFiles.length ? "checked" : ""}`}>{baseFiles.length ? <Check size={13} /> : "1"}</span><div><strong>Base source file</strong><span>{baseFiles.length ? "File selected" : "Waiting for upload"}</span></div></div>
-              <div className="checklist-row"><span className={`check-circle ${supportFiles.length ? "checked" : ""}`}>{supportFiles.length ? <Check size={13} /> : "2"}</span><div><strong>Supporting references</strong><span>{supportFiles.length ? `${supportFiles.length} file(s) selected` : "Waiting for upload"}</span></div></div>
-              <div className="checklist-row"><span className={`check-circle ${status === "complete" ? "checked" : ""}`}>{status === "complete" ? <Check size={13} /> : "3"}</span><div><strong>Processing engine</strong><span>{status === "complete" ? "Demo status only" : "Not connected yet"}</span></div></div>
+          <div className="panel controls">
+            <div className="panel-head">
+              <div>
+                <h3><SlidersHorizontal size={17} /> Run readiness</h3>
+                <p>Check your inputs before processing.</p>
+              </div>
+              <span className="step-tag">02 / RUN</span>
             </div>
-            <button className="btn btn-primary run-button" onClick={runDemo} disabled={!canRun}>
-              <Zap size={17} /> Validate upload setup <ArrowRight size={16} />
+
+            <div className="readiness">
+              <div className="readiness-row">
+                <span className={base.length ? "ready-check" : "number-check"}>
+                  {base.length ? <Check size={13} /> : "1"}
+                </span>
+                <div>
+                  <b>Base source file</b>
+                  <small>{base.length ? "File selected" : "Waiting for upload"}</small>
+                </div>
+              </div>
+              <div className="readiness-row">
+                <span className={support.length ? "ready-check" : "number-check"}>
+                  {support.length ? <Check size={13} /> : "2"}
+                </span>
+                <div>
+                  <b>Supporting references</b>
+                  <small>
+                    {support.length ? `${support.length} file(s) selected` : "Waiting for upload"}
+                  </small>
+                </div>
+              </div>
+              <div className="readiness-row">
+                <span className={status === "demo" ? "ready-check" : "number-check"}>
+                  {status === "demo" ? <Check size={13} /> : "3"}
+                </span>
+                <div>
+                  <b>Processing engine</b>
+                  <small>
+                    {status === "demo" ? "Demo validation only" : "Backend connection required"}
+                  </small>
+                </div>
+              </div>
+            </div>
+
+            <button className="button button-primary run-btn" onClick={validate}>
+              <Zap size={16} /> Validate upload setup <ArrowRight size={15} />
             </button>
-            <button className="btn btn-quiet reset-button" onClick={resetRun}><RefreshCw size={15} /> Reset run status</button>
-            {!canRun && status !== "complete" && <div className="helper-text"><AlertCircle size={14} /> Add one base file and at least one supporting file to enable validation.</div>}
+            <button className="reset-btn" onClick={reset}>
+              <RefreshCw size={13} /> Reset status
+            </button>
           </div>
         </section>
 
-        <div className="section-heading lower-heading">
-          <div><div className="section-kicker">STEP 03</div><h2>Processing overview</h2><p>These indicators will be driven by the processing engine once it is connected.</p></div>
-          <span className={`run-status ${status === "complete" ? "success" : ""}`}><span className="status-dot" /> {status === "complete" ? "Demo run complete" : "Awaiting input"}</span>
+        <div className="section-title overview-title">
+          <div>
+            <div className="step-label">03 / MONITOR</div>
+            <h2>Processing overview</h2>
+            <p>Summary metrics and pipeline status for the current run.</p>
+          </div>
+          <div className={`status-pill ${status === "demo" ? "is-done" : ""}`}>
+            <i />{status === "demo" ? "Demo validation complete" : "Awaiting input"}
+          </div>
         </div>
 
-        <section className="metrics-grid">
-          <Metric label="Files selected" value={totalFiles} note={`${baseFiles.length} base · ${supportFiles.length} supporting`} icon={FileText} tone="blue" />
-          <Metric label="Source data rows" value="—" note="Available after backend processing" icon={BarChart3} tone="purple" />
-          <Metric label="T-numbers derived" value="—" note="Rule engine not connected" icon={Network} tone="green" />
-          <Metric label="Exceptions flagged" value="—" note="Available after validation" icon={AlertCircle} tone="orange" />
+        <section className="metrics">
+          <Metric
+            icon={FileText}
+            label="Files selected"
+            value={total}
+            caption={`${base.length} base · ${support.length} supporting`}
+            color="blue"
+          />
+          <Metric
+            icon={BarChart3}
+            label="Source rows"
+            value="—"
+            caption="Available after processing"
+            color="purple"
+          />
+          <Metric
+            icon={Network}
+            label="T-numbers derived"
+            value="—"
+            caption="Rule engine not connected"
+            color="green"
+          />
+          <Metric
+            icon={AlertCircle}
+            label="Exceptions"
+            value="—"
+            caption="Available after validation"
+            color="orange"
+          />
         </section>
 
-        <section className="panel pipeline-panel">
-          <div className="panel-title-row"><div><h3><Activity size={18} /> Automation pipeline</h3><p>Planned processing sequence from upload through master database generation.</p></div><span className="progress-label">{progress}%</span></div>
-          <div className="progress-track"><div className="progress-fill" style={{ width: `${progress}%` }} /></div>
-          <div className="pipeline-grid">
-            {stages.map((stage, idx) => {
-              const Icon = stage.icon;
-              const done = completedStages.includes(stage.title);
-              return <div className={`pipeline-stage ${done ? "done" : ""}`} key={stage.title}>
-                <div className="stage-top"><div className="stage-icon"><Icon size={18} /></div><span className="stage-number">0{idx + 1}</span></div>
-                <strong>{stage.title}</strong><p>{stage.detail}</p>
-                <span className={`stage-state ${done ? "done-state" : ""}`}>{done ? <><CheckCircle2 size={13} /> Demo complete</> : <><Clock3 size={13} /> Pending connection</>}</span>
-              </div>;
-            })}
+        <section className="panel pipeline">
+          <div className="panel-head">
+            <div>
+              <h3><Activity size={17} /> Automation pipeline</h3>
+              <p>Planned processing stages for generating the master database.</p>
+            </div>
+            <span className="progress-value">{status === "demo" ? "25%" : "0%"}</span>
           </div>
-          {message && <div className={`message-banner ${status === "complete" ? "message-info" : "message-warn"}`}><AlertCircle size={17} /><div><strong>{status === "complete" ? "Prototype status" : "Action needed"}</strong><span>{message}</span></div><button onClick={() => setMessage("")} aria-label="Dismiss message"><X size={15} /></button></div>}
-          {status === "complete" && <div className="output-strip"><div className="output-icon"><Download size={18} /></div><div><strong>Run summary available</strong><span>Run timestamp: {runTime}. This is a configuration summary, not a generated master database.</span></div><button className="btn btn-outline" onClick={downloadRunSummary}>Download run summary</button></div>}
+
+          <div className="progress-track">
+            <div style={{ width: status === "demo" ? "25%" : "0%" }} />
+          </div>
+
+          <div className="pipeline-grid">
+            {pipeline.map(([name, desc, Icon], i) => (
+              <div className="pipeline-stage" key={name}>
+                <div className="stage-head">
+                  <div className="stage-icon"><Icon size={17} /></div>
+                  <span>0{i + 1}</span>
+                </div>
+                <b>{name}</b>
+                <p>{desc}</p>
+                <small>
+                  <Clock3 size={12} />
+                  {status === "demo" && i === 0 ? "UI check only" : "Backend pending"}
+                </small>
+              </div>
+            ))}
+          </div>
+
+          {notice && (
+            <div className="notice">
+              <AlertCircle size={17} />
+              <span>{notice}</span>
+              <button onClick={() => setNotice("")}><X size={14} /></button>
+            </div>
+          )}
+
+          {status === "demo" && (
+            <div className="download-summary">
+              <div className="summary-check"><CheckCircle2 size={19} /></div>
+              <div className="summary-copy">
+                <b>Configuration summary is ready</b>
+                <span>{runAt}. This is not a generated master database.</span>
+              </div>
+              <button className="button button-outline" onClick={download}>
+                <Download size={14} /> Download summary
+              </button>
+            </div>
+          )}
         </section>
 
-        <footer className="page-footer"><span>© KPMG · Telecom Solution</span><span><LockKeyhole size={13} /> Prototype UI only · No backend data processing connected</span></footer>
+        <footer>
+          <span>© KPMG Assurance and Consulting Service LLP</span>
+          <span><LockKeyhole size={12} /> Prototype interface · Processing backend not connected</span>
+        </footer>
       </main>
     </div>
   );
