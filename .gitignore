@@ -1,1 +1,12 @@
 node_modules/
+dist/
+.env
+.env.local
+
+# Backend
+backend/.venv/
+backend/.env
+backend/samples/output/
+__pycache__/
+*.pyc
+.pytest_cache/
