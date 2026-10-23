@@ -41,3 +41,17 @@ def test_only_source_file_is_mandatory_in_ui():
     app_jsx = _read("App.jsx")
     check = app_jsx[app_jsx.index("const localCheck"): app_jsx.index("const failRequest")]
     assert "source.length" in check and "support.length" not in check
+
+
+def test_results_table_uses_records_endpoint_contract():
+    from app.services.records import STATUS_FILTERS
+
+    api_js, table = _read("api.js"), _read("ResultsTable.jsx")
+    assert "/records?" in api_js
+    line = next(ln for ln in api_js.splitlines() if "new URLSearchParams" in ln)
+    sent = set(re.findall(r"\b(page_size|page|rule|status|q)\b(?=[,:} ])", line))
+    params = {p["name"] for p in app.openapi()["paths"]["/api/jobs/{job_id}/records"]["get"]["parameters"]}
+    assert sent == {"q", "status", "rule", "page", "page_size"}
+    assert sent <= params
+    ui_filters = set(re.findall(r'\["(\w+)", "[^"]+"\]', table))
+    assert ui_filters == set(STATUS_FILTERS)

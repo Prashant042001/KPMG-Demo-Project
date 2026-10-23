@@ -19,6 +19,8 @@ class RuleKind(str, Enum):
     T_SUFFIX_E = "T_SUFFIX_E"  # T7386/E
     T_OTHER_SUFFIX = "T_OTHER_SUFFIX"  # T1234<approved suffix>
     T_EMBEDDED = "T_EMBEDDED"  # ABC-T8102-RENT
+    T_ZERO_DELIM = "T_ZERO_DELIM"  # T000-1234, T000/1234
+    T_MTN_SUFFIX = "T_MTN_SUFFIX"  # T590MTN
     NUM_MTN_S = "NUM_MTN_S"  # 3133MTN/S
     NUM_MTN_E = "NUM_MTN_E"  # 3133MTN/E
     MTN_PREFIX_NUM = "MTN_PREFIX_NUM"  # MTN3133
@@ -36,6 +38,8 @@ T_PATTERN_KINDS = {
     RuleKind.T_SUFFIX_E,
     RuleKind.T_OTHER_SUFFIX,
     RuleKind.T_EMBEDDED,
+    RuleKind.T_ZERO_DELIM,
+    RuleKind.T_MTN_SUFFIX,
 }
 # Pattern rules whose match is a Site ID only.
 SITE_PATTERN_KINDS = {

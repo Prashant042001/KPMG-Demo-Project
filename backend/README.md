@@ -164,6 +164,9 @@ The master workbook is always `.xlsx`. The mapping and exception reports follow 
 | POST | `/api/validate` | Validate files, worksheets, header rows and columns. Does not generate output. |
 | POST | `/api/process` | Start a derivation job (returns `202` with a `job_id`) |
 | GET | `/api/jobs/{job_id}` | Status, stage, progress, metrics, summary, 100-row preview |
+| GET | `/api/jobs/{job_id}/records` | Search, filter and page through every derived row: `q` (text or row number), `status` (`all`, `tnumber_derived`, `tnumber_unresolved`, `site_id_unresolved`, `conflict`, `overridden`), `rule` (e.g. `R1`), `page`, `page_size` (max 500) |
+| GET | `/api/jobs/{job_id}/gis` | GIS view: sites from the Operational Site List (with coordinates, region, owner) and their linked payment counts and totals |
+| GET | `/api/jobs/{job_id}/gis/sites/{site_id}` | One site's details and its payment rows from the master database (Vendor Name, VENDOR_SITE_CODE, Payment Date, Payment Amount) |
 | GET | `/api/jobs/{job_id}/download/master` | Master workbook (5 sheets) |
 | GET | `/api/jobs/{job_id}/download/mapping` | Mapping summary |
 | GET | `/api/jobs/{job_id}/download/exceptions` | Exception report |
@@ -190,8 +193,8 @@ There are two kinds of upload:
 | --- | --- | --- |
 | Source file | `VENDOR_SITE_CODE` **or** `Vendor Site`; optional `VENDOR_SITE_CODE_ALT` | everything |
 | BTS Site Report Schedule (supporting) | `VENDOR_SITE_CODE`, `T number`; optional `VENDOR_SITE_CODE_ALT`, `Site ID` | R1, X-code validation, ALT values when the source has none |
-| Operational Site List Summary (supporting) | `Account Number`, `Site ID` | R28, X-code validation |
-| Latest Payment Data (supporting) | `Vendor Site` | recorded only (see section 7) |
+| Operational Site List Summary (supporting) | `Account Number`, `Site ID`; optional for the GIS view: `Site Name`, `Region`, `Property Owner`, `Latitude` + `Longitude` (or one `Coordinates` column) | R28, X-code validation, GIS map |
+| Latest Payment Data (supporting) | `Vendor Site` | recorded only (see section 8) |
 
 - **No supporting dataset is mandatory.** If one is missing, the rules that need it are skipped. The exception report
   records this against each record that stayed unresolved (`MISSING_REFERENCE_DATA`).
@@ -224,19 +227,28 @@ There are two kinds of upload:
    output is never changed.
 6. **Candidates:** every rule is evaluated for every record, and each match becomes a *candidate*.
    - A failed or empty reference look-up never blocks a pattern rule.
-7. **Resolution:** `TNUMBER` and `SITE ID` are resolved separately, and the highest-priority valid candidate is
-   selected.
-   - A T-number found explicitly (by R1 or by a T-number pattern) always takes precedence over a T-number composed
-     from a Site ID.
-   - A valid candidate with a different value raises a **conflict**. It is flagged but never substituted for the
-     selected value.
-   - **Strict matching** (sidebar toggle): conflicting or ambiguous values are withheld instead of being kept.
+7. **Resolution** (business instruction, 23 Oct 2026):
+   - **R1 is authoritative.** When the BTS look-up (R1) yields a valid T-number, it is used even if other rules
+     disagree. Those rules are marked `OVERRIDDEN BY R1` in the Mapping Summary and noted as Info-level
+     `RESOLVED_BY_PRIORITY` exceptions, and the Conflict Indicator stays `N`.
+   - **Without R1, priority decides.** If R1 yields nothing (no match, blank or `NA`, or several T-numbers), the
+     highest-priority other rule wins. The `VENDOR_SITE_CODE` rules come first (R2–R14, R30, R31), then the ALT rules
+     (R15–R27). A T-number composed from an Operational Site List Site ID (R28) is used only when no pattern finds
+     one. Disagreeing lower-priority rules are noted as `RESOLVED_BY_PRIORITY` (Info). To flag them as conflicts
+     instead, set `derivation.flag_resolved_conflicts` to `true`.
+   - **Consistent pairs.** `SITE ID` comes from the same rule as the selected `TNUMBER`, so the output never mixes
+     values from two rules.
+   - **Ambiguity is still flagged.** If one rule finds several values (for example, two T-numbers in one field, or
+     several T-numbers for one code in the BTS data), the record is flagged, unless R1 overrides it.
+   - **Strict matching** (sidebar toggle): disagreements that R1 doesn't settle are withheld instead of resolved by
+     priority.
 8. **Cross-record conflicts:** the same Vendor Site Code resolving to different values across records is flagged as a
    conflict.
 9. **Unresolved values:**
    - When no T-number can be derived, `TNUMBER` contains exactly `cannot be derived`.
    - When no Site ID can be derived, `SITE ID` is left blank and flagged.
    - Site IDs never carry prefixes or suffixes (`/E`, `/ELEC`, `MTN`, `T`).
+   - An all-zero number (`T0000`, `X000`) is treated as a placeholder and never becomes a T-number or Site ID.
 
 | Rule kind | Example | TNUMBER | SITE ID |
 | --- | --- | --- | --- |
@@ -251,12 +263,45 @@ There are two kinds of upload:
 | R12/R25 | `MTN77881` | composed `T77881` | `77881` |
 | R13/R26 | `5566-LEASE` | composed `T5566` | `5566` |
 | R14/R27 | `0123` | `cannot be derived` (T123 is not a valid T-number) | `123` |
+| R30 (business instruction 23 Oct 2026) | `T000-1234`, `T000/1234` (`T` + zeros + `-` or `/` + 4–5 digits, whole value) | `T1234` | `1234` |
+| R31 (business instruction 23 Oct 2026) | `T590MTN` (`T` + 3–5 digits + `MTN`, whole value) | `T590` | `590` |
 | R28 Operational Site List | Account Number = Vendor Site Code | composed from Site ID | Site ID |
 | R9 | modifier | allows 4–5 digit T-numbers | |
 
 ---
 
-## 5. Outputs
+## 5. GIS analysis
+
+The **GIS Analysis** button (or *GIS analysis* in the sidebar) opens a map of the sites in the Operational Site List
+Summary.
+
+**How the map is linked to the master database:**
+- The map belongs to a **completed processing run**. Each run links every site to the master-database rows whose
+  derived `SITE ID` equals the site's `Site ID`. Leading zeros are ignored, so `0123` matches `123`.
+- Before any run has completed, the GIS page asks you to run the T-number & Site ID derivation first.
+- The latest run is remembered across page refreshes for as long as the backend keeps it (`NCA_JOB_TTL_MINUTES`,
+  default 60). After that, run again.
+
+**Using the map:**
+- Click a site, on the map or in the list, to see:
+  - its `Site ID`, `Site Name`, `Property Owner`, `Region`, T-number and coordinates, from the Operational Site List;
+  - its payment rows from the master database: `Vendor Name`, `VENDOR_SITE_CODE`, `Payment Date` and
+    `Payment Amount`.
+- The column headers shown are the ones found in your source file.
+
+**What the map needs:**
+- **Coordinates:** `Latitude` and `Longitude` columns in decimal degrees (e.g. `-26.2041`, `28.0473`; a decimal
+  comma is also accepted), or one `Coordinates` column (`-26.2041, 28.0473`). Sites without coordinates are listed
+  but not plotted, and the page says which columns are missing.
+- **Paid sites not in the site list** can't be plotted. They are listed as links, so their payments can still be
+  opened.
+- **Map background tiles** come from OpenStreetMap by default. Only the visible map area is requested; no site or
+  payment data is sent. If public tiles aren't allowed, set `VITE_MAP_TILE_URL` in `.env.local` to a
+  company-approved tile server. If tiles can't load, the sites are still plotted on a blank background.
+
+---
+
+## 6. Outputs
 
 **Master workbook** (`master_database_<job>.xlsx`), headers frozen and filterable:
 
@@ -302,7 +347,7 @@ There are two kinds of upload:
 
 ---
 
-## 6. Security controls
+## 7. Security controls
 
 - **Uploads:**
   - only `.xlsx`, `.xls` and `.csv` are accepted;
@@ -326,7 +371,7 @@ There are two kinds of upload:
 
 ---
 
-## 7. Items requiring business confirmation
+## 8. Items requiring business confirmation
 
 These items appear in every run's *Processing Summary* and *Rule Audit*:
 
@@ -369,7 +414,7 @@ These items appear in every run's *Processing Summary* and *Rule Audit*:
 
 ---
 
-## 8. Project layout
+## 9. Project layout
 
 ```text
 backend/

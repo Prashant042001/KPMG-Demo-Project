@@ -5,6 +5,7 @@ Run ``python -m samples.synthetic`` from the ``backend`` folder to write the sam
 """
 from __future__ import annotations
 
+import datetime as dt
 import io
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from openpyxl import Workbook
 
 VSC, ALT = "VENDOR_SITE_CODE", "VENDOR_SITE_CODE_ALT"
 
-BASE_HEADER = ["INVOICE_NUM", VSC, ALT, "INVOICE_AMOUNT", "DESCRIPTION"]
+BASE_HEADER = ["INVOICE_NUM", VSC, ALT, "INVOICE_AMOUNT", "DESCRIPTION", "Vendor Name", "Payment Date", "Payment Amount"]
 # (vendor site code, alt, expected TNUMBER, expected SITE ID) - the expectation columns are for tests only.
 BASE_ROWS = [
     ("SYN-001", "", "T9001", "9001"),            # R1 reference mapping
@@ -56,10 +57,17 @@ BTS_ROWS = [
     ["T5000", "T5001", "", "Synthetic Site D"],
 ]
 
-OPS_HEADER = ["Account Number", "Site ID", "Site Name"]
+OPS_HEADER = ["Account Number", "Site ID", "Site Name", "Region", "Property Owner", "Latitude", "Longitude"]
+# Invented sites and coordinates. 'OPS-' accounts match no source code, so they only feed the GIS view.
 OPS_ROWS = [
-    ["ACC-500", "6600", "Synthetic Site E"],
-    ["ACC-777", "X8754", "Synthetic Site F"],
+    ["ACC-500", "6600", "Synthetic Site E", "Synthetic North", "Synthetic Owner E", -26.1950, 28.0340],
+    ["ACC-777", "X8754", "Synthetic Site F", "Synthetic North", "Synthetic Owner F", -25.7460, 28.1880],
+    ["OPS-9001", "9001", "Synthetic Site A", "Synthetic North", "Synthetic Owner A", -26.1076, 28.0567],
+    ["OPS-6542", "6542", "Synthetic Site G", "Synthetic Coast", "Synthetic Owner G", -29.8587, 31.0218],
+    ["OPS-3133", "3133", "Synthetic Site H", "Synthetic Cape", "Synthetic Owner H", -33.9249, 18.4241],
+    ["OPS-8646", "8646", "Synthetic Site I", "Synthetic Cape", "Synthetic Owner I", "-33,9600", "18,4700"],
+    ["OPS-7777", "7777", "Synthetic Site J (no payments)", "Synthetic Central", "Synthetic Owner J", -29.0852, 26.1596],
+    ["OPS-5555", "5555", "Synthetic Site K (no coordinates)", "Synthetic Central", "Synthetic Owner K", None, None],
 ]
 
 
@@ -82,7 +90,8 @@ def base_rows_for_sheet() -> list[list]:
     rows = []
     for i, (vsc, alt, _, _) in enumerate(BASE_ROWS, start=1):
         desc = '=HYPERLINK("http://example.invalid","x")' if i == 1 else f"Synthetic payment {i}"
-        rows.append([f"INV-{i:04d}", vsc, alt or None, 1000 + i, desc])
+        rows.append([f"INV-{i:04d}", vsc, alt or None, 1000 + i, desc,
+                     f"Synthetic Vendor {i % 5 + 1}", dt.date(2025, 1 + i % 12, 1 + i % 28), 1000.0 + 10 * i])
     return rows
 
 

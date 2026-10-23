@@ -56,12 +56,12 @@ def test_numeric_excel_cell_values(derive):
 
 
 def test_explicit_t_number_outranks_composed_reference_value(derive):
-    """R28 (higher priority) only supplies a Site ID; 'T' + that Site ID must not overwrite R3's explicit T-number."""
-    _, outs = derive([("4908MTN", "")], ops_rows=[["4908MTN", "4909", "a"]])
+    """R28 only supplies a Site ID; 'T' + that Site ID must not overwrite R3's explicit T-number."""
+    res, outs = derive([("4908MTN", "")], ops_rows=[["4908MTN", "4909", "a"]])
     o = outs[0]
-    assert (o.tnumber, o.t_rule, o.t_status) == ("T4908", "R3", "DERIVED")
-    assert o.conflict  # Site ID 4909 (R28) vs 4908 (R3) is flagged for review
+    assert (o.tnumber, o.site_id, o.t_rule, o.site_rule) == ("T4908", "4908", "R3", "R3")  # consistent pair
     assert o.candidate_tnumbers == "T4908, T4909"
+    assert any("R28 gave 4909" in e.detail for e in res.result.exceptions)  # disagreement recorded
 
 
 def test_r7_r21_remain_flagged_until_suffixes_are_approved(run):
@@ -187,9 +187,45 @@ def test_reference_placeholders_are_blank_not_invalid(run, marker):
 
 
 def test_site_id_stays_paired_with_selected_t_number(run):
-    """Code says 12470, ALT says T12740: output a consistent pair and flag the conflict."""
+    """Code says 12470, ALT says T12740: the code rule wins by priority and the pair stays consistent."""
     supplier = syn.bts_workbook([["12470MTN SYN", "T12740 SYNTHETIC MALL", ""]], header=SUPPLIER_HEADER)
     res = run(source=syn.base_workbook([["Co", "12470MTN SYN", "PN-1", 1]], header=VENDOR_SITE_HEADER), bts=supplier, ops=False)
     o = res.result.records[0].outcome
-    assert (o.tnumber, o.site_id, o.t_rule, o.site_rule) == ("T12740", "12740", "R22", "R22")
-    assert o.conflict
+    assert (o.tnumber, o.site_id, o.t_rule, o.site_rule) == ("T12470", "12470", "R13", "R13")
+    assert not o.conflict and o.candidate_tnumbers == "T12470, T12740"
+
+
+@pytest.mark.parametrize(
+    "code,t,site",
+    [("T000-1234", "T1234", "1234"), ("T000/1234", "T1234", "1234"), ("T0-56789", "T56789", "56789"),
+     ("T0000/4321", "T4321", "4321"), ("t000 - 4321", "T4321", "4321")],
+)
+def test_r30_zero_prefix_with_delimiter(derive, code, t, site):
+    _, outs = derive([(code, "")])
+    assert (outs[0].tnumber, outs[0].site_id, outs[0].t_rule) == (t, site, "R30")
+    assert not outs[0].conflict
+
+
+@pytest.mark.parametrize("code,t,site", [("T590MTN", "T590", "590"), ("T590 MTN", "T590", "590"), ("T59012MTN", "T59012", "59012")])
+def test_r31_t_number_followed_by_mtn(derive, code, t, site):
+    _, outs = derive([(code, "")])
+    assert (outs[0].tnumber, outs[0].site_id) == (t, site)
+    assert "R31" in {c.rule_id for c, _ in outs[0].candidates}
+
+
+@pytest.mark.parametrize("code", ["T000-1234-X", "T000-123", "T000-1234567", "AT000-1234", "T590MTN/S", "T59MTN", "T590MTNX", "T590"])
+def test_new_rules_only_match_their_exact_shapes(derive, code):
+    _, outs = derive([(code, "")])
+    assert not {"R30", "R31"} & {c.rule_id for c, _ in outs[0].candidates}
+
+
+@pytest.mark.parametrize("code", ["T0000", "T0000-X", "X000-1234", "ABC-T00000"])
+def test_all_zero_placeholders_are_never_identifiers(derive, code):
+    _, outs = derive([(code, "")])
+    assert outs[0].tnumber == CANNOT_BE_DERIVED and outs[0].site_id == ""
+
+
+def test_new_rules_read_vendor_site_column_too(run):
+    rows = [["Co", "T000-1234", "PN-1", 1], ["Co", "T590MTN", "PN-2", 1]]
+    res = run(source=syn.base_workbook(rows, header=VENDOR_SITE_HEADER), bts=False, ops=False)
+    assert [r.outcome.tnumber for r in res.result.records] == ["T1234", "T590"]

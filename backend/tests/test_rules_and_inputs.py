@@ -14,7 +14,9 @@ from tests.conftest import make_files
 
 def test_rules_are_loaded_from_backend_configuration(rule_config):
     rs = load_ruleset(rule_config)
-    assert [r.rule_id for r in rs.rules] == [f"R{i}" for i in range(1, 30)]
+    ids = [r.rule_id for r in rs.rules]
+    assert sorted(ids, key=lambda x: int(x[1:])) == [f"R{i}" for i in range(1, 32)]
+    assert ids.index("R30") < ids.index("R15") and ids.index("R31") < ids.index("R15")  # code rules before ALT rules
     assert rs.by_id("R3").kind == RuleKind.DIGITS_MTN and rs.by_id("R3").status == "ACTIVE"
     assert rs.t_digits == (4, 5)  # R9 approved
     assert rs.version

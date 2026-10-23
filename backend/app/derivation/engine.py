@@ -45,6 +45,7 @@ EX_MISSING_REFERENCE = "MISSING_REFERENCE_DATA"
 EX_AMBIGUOUS_REFERENCE = "AMBIGUOUS_REFERENCE_MAPPING"
 EX_MULTIPLE_CANDIDATES = "MULTIPLE_CANDIDATE_IDENTIFIERS"
 EX_CONFLICT = "CONFLICTING_MAPPING"
+EX_RESOLVED = "RESOLVED_BY_PRIORITY"
 EX_INVALID = "INVALID_CANDIDATE"
 EX_UNVERIFIED = "UNVERIFIED_IDENTIFIER"
 EX_MISSING_COLUMN = "MISSING_COLUMN"
@@ -164,6 +165,9 @@ class DerivationEngine:
         self.latest_payment_supplied = latest_payment_supplied
         self.patterns = compile_patterns(rule_config, ruleset, formats)
         self.compose = bool(rule_config.get("derivation", {}).get("compose_tnumber_from_site_id", True))
+        deriv = rule_config.get("derivation", {})
+        self.authoritative = str(deriv.get("authoritative_rule", "R1")).upper()
+        self.flag_resolved_conflicts = bool(deriv.get("flag_resolved_conflicts", False))
         x_cfg = rule_config.get("x_codes", {})
         self.x_accept_unverified = bool(x_cfg.get("accept_without_reference", False))
         self.x_to_tnumber = bool(x_cfg.get("map_to_tnumber", False))
@@ -320,7 +324,8 @@ class DerivationEngine:
                       source_file=source_file, source_field=source_field, original_value=value)
 
         if kind == RuleKind.T_EMBEDDED:
-            nums = list(dict.fromkeys(m.group("num") for m in rx.finditer(up)))
+            # An all-zero number (e.g. the 'T0000' in 'T0000-1234') is a placeholder, not an identifier.
+            nums = list(dict.fromkeys(m.group("num") for m in rx.finditer(up) if m.group("num").strip("0")))
             if not nums:
                 return []
             if len(nums) > 1:
@@ -331,8 +336,8 @@ class DerivationEngine:
 
         if kind == RuleKind.X_PREFIX:
             m = rx.match(up)  # 'begins with X followed by a numeric identifier'; trailing text is allowed
-            if not m:
-                return []
+            if not m or not m.group("num").strip("0"):
+                return []  # no X-code, or an all-zero placeholder such as X000
             code = f"X{m.group('num')}"
             if not self.fmt.is_x_site_id(code):
                 return [Candidate(**common, matching_key=code, affects_t=False, status=INVALID,
@@ -353,6 +358,8 @@ class DerivationEngine:
             return []
         num = m.group("num")
         if kind in T_PATTERN_KINDS:
+            if not num.strip("0"):
+                return []  # all-zero placeholder, not a T-number
             return [Candidate(**common, matching_key=m.group(0), tnumber=f"T{num}", site_id=num)]
         if kind in SITE_PATTERN_KINDS:
             if not self.fmt.is_numeric_site_id(num):
@@ -364,26 +371,42 @@ class DerivationEngine:
 
     # ------------------------------------------------------------------ resolution
     def _resolve(self, cands: list[Candidate]) -> Outcome:
+        """Pick TNUMBER and SITE ID.
+
+        1. The authoritative rule (R1, BTS look-up) wins whenever it produced a valid T-number; any other rule that
+           disagrees is overridden and noted (Info), not flagged as a conflict.
+        2. Otherwise the highest-priority rule wins (VENDOR_SITE_CODE rules before VENDOR_SITE_CODE_ALT rules). A
+           T-number composed from a reference Site ID (R28) is used only when no pattern rule found one. Lower-priority
+           disagreements are noted (Info), or flagged as conflicts if derivation.flag_resolved_conflicts is true.
+        Unresolvable ambiguity (several values from one rule) is always flagged unless R1 overrides it.
+        """
         out = Outcome()
         matched = [c for c in cands if c.status == MATCHED]
         ambiguous = [c for c in cands if c.status == AMBIGUOUS]
+        auth = next((c for c in matched if c.rule_id == self.authoritative and c.tnumber), None)
 
-        # Candidates arrive in priority order. Explicit T-numbers outrank composed ones.
-        t_cands = [c for c in matched if c.tnumber and not c.t_composed] + [c for c in matched if c.tnumber and c.t_composed]
+        def t_rank(c: Candidate) -> tuple:
+            return (c is not auth, c.t_composed and c.tier == "reference", c.priority)
+
+        t_cands = sorted((c for c in matched if c.tnumber), key=t_rank)
         t_sel = t_cands[0] if t_cands else None
-        # SITE ID: reference data first; otherwise keep the Site ID paired with the selected T-number, so the
-        # output never combines a T-number from one rule with a disagreeing Site ID from another.
-        site_ref = [c for c in matched if c.site_id and c.tier == "reference"]
-        site_pat = [c for c in matched if c.site_id and c.tier != "reference"]
-        if t_sel is not None and t_sel in site_pat:
-            site_pat = [t_sel] + [c for c in site_pat if c is not t_sel]
-        s_cands = site_ref + site_pat
+        # SITE ID comes from the same rule as the selected T-number whenever that rule supplies one, so the output
+        # never pairs a T-number from one rule with a Site ID from another. Otherwise: reference data, then patterns.
+        paired = [t_sel] if t_sel is not None and t_sel.site_id else []
+        site_ref = [c for c in matched if c.site_id and c.tier == "reference" and c not in paired]
+        site_pat = [c for c in matched if c.site_id and c.tier != "reference" and c not in paired]
+        s_cands = paired + site_ref + site_pat
         s_sel = s_cands[0] if s_cands else None
-        t_conf = [c for c in t_cands if t_sel and c.tnumber != t_sel.tnumber]
-        s_conf = [c for c in s_cands if s_sel and c.site_id != s_sel.site_id]
-        withhold_t = self.strict and t_sel is not None and (t_conf or any(c.affects_t for c in ambiguous))
-        withhold_s = self.strict and s_sel is not None and (s_conf or ambiguous)
-        out.conflict = bool(t_conf or s_conf or ambiguous)
+
+        t_diff = [c for c in t_cands if t_sel and c.tnumber != t_sel.tnumber]
+        s_diff = [c for c in s_cands if s_sel and c.site_id != s_sel.site_id]
+        overridden_amb = [c for c in ambiguous if auth is not None and c.rule_id != auth.rule_id]
+        open_amb = [c for c in ambiguous if c not in overridden_amb]
+        flag_diffs = self.flag_resolved_conflicts and auth is None
+        withhold_t = self.strict and t_sel is not None and t_sel is not auth and (
+            t_diff or any(c.affects_t for c in open_amb))
+        withhold_s = self.strict and s_sel is not None and s_sel is not auth and (s_diff or open_amb)
+        out.conflict = bool(open_amb) or (flag_diffs and bool(t_diff or s_diff))
         out.candidate_tnumbers = ", ".join(dict.fromkeys(
             [c.tnumber for c in t_cands] + [o for c in ambiguous if c.affects_t for o in c.options if o.startswith("T")]
         ))
@@ -402,17 +425,20 @@ class DerivationEngine:
         elif any(c.status == UNVERIFIED for c in cands):
             out.site_status = "UNVERIFIED"
 
+        overridden = f"OVERRIDDEN BY {auth.rule_id}" if auth else "OVERRIDDEN (LOWER PRIORITY)"
         for c in cands:
-            if c.status != MATCHED:
+            if c in overridden_amb:
+                status = f"{c.status}; {overridden}"
+            elif c.status != MATCHED:
                 status = c.status
             elif (c is t_sel and not withhold_t) and (c is s_sel and not withhold_s):
                 status = "SELECTED"
             elif c is t_sel and not withhold_t:
-                status = "SELECTED (TNUMBER)" + ("; CONFLICTING (SITE ID)" if c.site_id and s_sel and c.site_id != s_sel.site_id else "")
+                status = "SELECTED (TNUMBER)"
             elif c is s_sel and not withhold_s:
-                status = "SELECTED (SITE ID)" + ("; CONFLICTING (TNUMBER)" if c in t_conf else "")
-            elif c in t_conf or c in s_conf:
-                status = "CONFLICTING"
+                status = "SELECTED (SITE ID)"
+            elif c in t_diff or c in s_diff:
+                status = "CONFLICTING" if flag_diffs else overridden
             elif c is t_sel or c is s_sel:
                 status = "WITHHELD (CONFLICT)"
             else:
@@ -420,8 +446,11 @@ class DerivationEngine:
             out.candidates.append((c, status))
 
         issues = out.issues
+        winner = (f"{auth.rule_id} (authoritative)" if auth else "rule priority")
         for c in cands:
-            if c.status == AMBIGUOUS:
+            if c in overridden_amb:
+                issues.append((EX_RESOLVED, "Info", c.rule_id, c.source_field, f"{c.note} - overridden by {auth.rule_id}"))
+            elif c.status == AMBIGUOUS:
                 category = EX_AMBIGUOUS_REFERENCE if c.tier == "reference" else EX_MULTIPLE_CANDIDATES
                 issues.append((category, "High", c.rule_id, c.source_field, c.note))
             elif c.status == INVALID:
@@ -430,12 +459,20 @@ class DerivationEngine:
                 issues.append((EX_UNVERIFIED, "Medium", c.rule_id, c.source_field, c.note))
             elif c.audit_flag and (c is t_sel or c is s_sel):
                 issues.append((EX_UNVERIFIED, "Info", c.rule_id, c.source_field, c.audit_flag))
-        for c in t_conf:
-            issues.append((EX_CONFLICT, "High", c.rule_id, "TNUMBER",
-                           f"Conflicting T-numbers: {t_sel.rule_id} gives {t_sel.tnumber}, {c.rule_id} gives {c.tnumber}"))
-        for c in s_conf:
-            issues.append((EX_CONFLICT, "High", c.rule_id, "SITE ID",
-                           f"Conflicting Site IDs: {s_sel.rule_id} gives {s_sel.site_id}, {c.rule_id} gives {c.site_id}"))
+        for c in t_diff:
+            if flag_diffs:
+                issues.append((EX_CONFLICT, "High", c.rule_id, "TNUMBER",
+                               f"Conflicting T-numbers: {t_sel.rule_id} gives {t_sel.tnumber}, {c.rule_id} gives {c.tnumber}"))
+            else:
+                issues.append((EX_RESOLVED, "Info", c.rule_id, "TNUMBER",
+                               f"T-number {t_sel.tnumber} from {t_sel.rule_id} kept by {winner}; {c.rule_id} gave {c.tnumber}"))
+        for c in s_diff:
+            if flag_diffs:
+                issues.append((EX_CONFLICT, "High", c.rule_id, "SITE ID",
+                               f"Conflicting Site IDs: {s_sel.rule_id} gives {s_sel.site_id}, {c.rule_id} gives {c.site_id}"))
+            else:
+                issues.append((EX_RESOLVED, "Info", c.rule_id, "SITE ID",
+                               f"Site ID {s_sel.site_id} from {s_sel.rule_id} kept by {winner}; {c.rule_id} gave {c.site_id}"))
         if out.tnumber == CANNOT_BE_DERIVED:
             why = "withheld because of conflicting results (strict matching)" if withhold_t else "no configured rule produced a valid T-number"
             issues.append((EX_UNRESOLVED_T, "Medium", "", "TNUMBER", f"T-number cannot be derived: {why}"))

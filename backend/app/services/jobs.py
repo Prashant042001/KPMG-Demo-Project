@@ -30,6 +30,8 @@ class Job:
     summary: dict[str, Any] | None = None
     metrics: dict[str, Any] | None = None
     preview: list[dict[str, Any]] = field(default_factory=list)
+    records: list[dict[str, Any]] = field(default_factory=list)  # served page by page, not in public()
+    gis: Any = None  # GisData for the GIS view, built with the master database
     outputs: dict[str, OutputFile] = field(default_factory=dict)
 
     def public(self) -> dict[str, Any]:
@@ -46,6 +48,7 @@ class Job:
             "summary": self.summary,
             "preview": self.preview,
             "downloads": sorted(self.outputs),
+            "record_count": len(self.records),
         }
 
 

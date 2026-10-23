@@ -42,6 +42,21 @@ export async function getJob(jobId) {
   return parse(await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}`));
 }
 
+// Search / filter / page through every derived row of a completed job.
+export async function getRecords(jobId, { q = "", status = "all", rule = "", page = 1, pageSize = 50 } = {}) {
+  const params = new URLSearchParams({ q, status, rule, page: String(page), page_size: String(pageSize) });
+  return parse(await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/records?${params}`));
+}
+
+// GIS view of a completed run: sites from the Operational Site List linked to master-database payments.
+export async function getGis(jobId) {
+  return parse(await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/gis`));
+}
+
+export async function getGisSite(jobId, siteId) {
+  return parse(await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/gis/sites/${encodeURIComponent(siteId)}`));
+}
+
 export async function downloadOutput(jobId, kind) {
   const res = await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/download/${kind}`);
   if (!res.ok) await parse(res);
