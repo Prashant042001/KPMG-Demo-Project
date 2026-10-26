@@ -1,6 +1,7 @@
 """Output workbook structure, preservation of source data and formula-injection protection."""
 from __future__ import annotations
 
+import datetime as dt
 import io
 
 from openpyxl import load_workbook
@@ -32,8 +33,9 @@ def test_all_source_rows_and_values_preserved(run):
     rows = list(ws.iter_rows(min_row=2, values_only=True))
     source = syn.base_rows_for_sheet()
     assert len(rows) == len(source) == res.summary["results"]["output_rows"]
+    as_excel = lambda v: dt.datetime(v.year, v.month, v.day) if type(v) is dt.date else v  # Excel stores dates as datetimes
     for out, src in zip(rows, source):
-        assert list(out[: len(src)]) == src
+        assert list(out[: len(src)]) == [as_excel(v) for v in src]
 
 
 def test_derived_values_in_master(run):
@@ -76,7 +78,7 @@ def test_exceptions_sheet_lists_unresolved_records(run):
     cats = {r[0] for r in wb["Exceptions"].iter_rows(min_row=2, values_only=True)}
     assert {
         "UNRESOLVED_TNUMBER", "UNRESOLVED_SITE_ID", "AMBIGUOUS_REFERENCE_MAPPING", "MULTIPLE_CANDIDATE_IDENTIFIERS",
-        "CONFLICTING_MAPPING", "UNVERIFIED_IDENTIFIER", "RULE_REQUIRES_CONFIRMATION",
+        "RESOLVED_BY_PRIORITY", "UNVERIFIED_IDENTIFIER", "RULE_REQUIRES_CONFIRMATION",
     } <= cats
 
 

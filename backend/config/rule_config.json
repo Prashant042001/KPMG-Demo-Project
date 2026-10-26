@@ -1,6 +1,6 @@
 {
   "_comment": "AUTHORITATIVE business configuration for T-number / Site ID derivation. It is version-controlled and loaded by the backend at the start of every processing job; users never upload rules. 'rules' holds the approved rules (taken from the approved T Number Rules worksheet), 'patterns' their technical definitions. Column aliases are compared after lower-casing and removing every non-alphanumeric character.",
-  "version": "2026-10-22.4",
+  "version": "2026-10-23.3",
 
   "columns": {
     "VENDOR_SITE_CODE": ["vendorsitecode"],
@@ -8,7 +8,17 @@
     "VENDOR_SITE": ["vendorsite"],
     "T_NUMBER": ["tnumber", "tno", "tnum"],
     "SITE_ID": ["siteid"],
-    "ACCOUNT_NUMBER": ["accountnumber", "accountno", "accountnum", "acctnumber"]
+    "ACCOUNT_NUMBER": ["accountnumber", "accountno", "accountnum", "acctnumber"],
+
+    "LATITUDE": ["latitude", "lat", "latdd", "latitudedd"],
+    "LONGITUDE": ["longitude", "long", "lon", "lng", "longdd", "longitudedd"],
+    "COORDINATES": ["coordinates", "gpscoordinates", "gps", "latlong", "latlng", "location"],
+    "SITE_NAME": ["sitename"],
+    "REGION": ["region"],
+    "PROPERTY_OWNER": ["propertyowner"],
+    "VENDOR_NAME": ["vendorname", "suppliername"],
+    "PAYMENT_DATE": ["paymentdate", "checkdate", "paiddate"],
+    "PAYMENT_AMOUNT": ["paymentamount", "amountpaid"]
   },
 
   "file_roles": {
@@ -27,7 +37,7 @@
     "ops": {
       "label": "Operational Site List Summary",
       "required": ["ACCOUNT_NUMBER", "SITE_ID"],
-      "optional": [],
+      "optional": ["SITE_NAME", "REGION", "PROPERTY_OWNER", "LATITUDE", "LONGITUDE", "COORDINATES"],
       "filename_hints": ["operational", "opssite", "sitelist"]
     },
     "latest_payment": {
@@ -75,6 +85,12 @@
      "description": "Where the Vendor Site Code begins with a 4- or 5-digit numeric value followed by any text or characters, the leading numeric value should be extracted and treated as the Site ID."},
     {"id": "R14", "kind": "LEADING_ZERO", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
      "description": "Where the Vendor Site Code starts with a leading zero followed by a 3-digit number, the leading zero should be removed and the remaining 3-digit number should be treated as the Site ID."},
+    {"id": "R30", "kind": "T_ZERO_DELIM", "status": "approved", "data_source": "Business instruction 2026-10-23", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code is 'T' followed by zeros, a '-' or '/' delimiter and a 4- or 5-digit number (e.g., T000-1234, T000/1234), the T-number is 'T' followed by that number (T1234) and the number is the Site ID (1234).",
+     "additional_info": "The whole value must have this shape; values with any other text are not matched by this rule."},
+    {"id": "R31", "kind": "T_MTN_SUFFIX", "status": "approved", "data_source": "Business instruction 2026-10-23", "column": "VENDOR_SITE_CODE", "matching_column": "VENDOR_SITE_CODE",
+     "description": "Where the Vendor Site Code is 'T' followed by a 3- to 5-digit number and the suffix MTN (e.g., T590MTN), the T-number is 'T' followed by that number (T590) and the number is the Site ID (590).",
+     "additional_info": "The whole value must have this shape. 3-digit T-numbers are accepted for this rule only, as instructed."},
     {"id": "R15", "kind": "T_DIRECT", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
      "description": "Where the Vendor Site Code Alt contains a Site Identifier in the format 'T' followed by a numeric value (e.g., T6542), the entire value should be directly mapped and treated as the Site ID."},
     {"id": "R16", "kind": "DIGITS_MTN", "status": "approved", "data_source": "BTS Site Report Schedule", "column": "VENDOR_SITE_CODE_ALT", "matching_column": "VENDOR_SITE_CODE_ALT",
@@ -125,6 +141,8 @@
     "T_SUFFIX_E": "(?<![A-Z0-9])T(?P<num>\\d{{T}})\\s*/\\s*E(?![A-Z0-9])",
     "T_OTHER_SUFFIX": "^T(?P<num>\\d{{T}})\\s*(?:{SUFFIXES})$",
     "T_EMBEDDED": "(?<![A-Z0-9])T(?P<num>\\d{{T}})(?!\\d)",
+    "T_ZERO_DELIM": "^T0+\\s*[-/]\\s*(?P<num>\\d{{T}})$",
+    "T_MTN_SUFFIX": "^T(?P<num>\\d{3,5})\\s*MTN$",
     "NUM_MTN_S": "^(?P<num>\\d+)\\s*MTN\\s*/\\s*S",
     "NUM_MTN_E": "^(?P<num>\\d+)\\s*MTN\\s*/\\s*E",
     "MTN_PREFIX_NUM": "^MTN\\s*(?P<num>\\d{4,5})(?!\\d)",
@@ -156,6 +174,10 @@
   "derivation": {
     "_comment": "compose_tnumber_from_site_id: when a rule yields only a numeric Site ID (e.g. 3133MTN/S -> 3133), compose TNUMBER as 'T' + Site ID (the convention stated in R3) if it passes the T-number format. A T-number found explicitly (R1 or a T-number pattern) always takes precedence over a composed one. priority_overrides: {\"R2\": 5} moves a rule (default priorities are 10, 20, 30... in the order above, reference look-ups first).",
     "compose_tnumber_from_site_id": true,
+    "authoritative_rule_comment": "Business instruction 2026-10-23: R1 (BTS Site Report Schedule look-up) is authoritative. When it yields a valid T-number, it is used even if other rules disagree; those rules are recorded as overridden (Info), not as conflicts. When R1 yields nothing, the highest-priority other rule wins.",
+    "authoritative_rule": "R1",
+    "flag_resolved_conflicts_comment": "When R1 yields nothing and lower-priority rules disagree with the winning rule: false = record as RESOLVED_BY_PRIORITY (Info, Conflict Indicator N); true = flag as CONFLICTING_MAPPING (High, Conflict Indicator Y).",
+    "flag_resolved_conflicts": false,
     "reference_rules_first": true,
     "priority_overrides": {}
   }

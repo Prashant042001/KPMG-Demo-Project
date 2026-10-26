@@ -171,17 +171,43 @@ def test_conflicting_reference_rows_are_flagged(derive):
     assert "AMBIGUOUS_REFERENCE_MAPPING" in exc_categories(res)
 
 
-def test_reference_beats_pattern_and_conflict_is_flagged(derive):
-    res, outs = derive([("T5000", "")], bts_rows=[["T5000", "T5001", "", "a"]])
+def test_r1_is_authoritative_over_other_rules(derive):
+    """Business instruction: R1 wins whenever it yields a T-number; disagreeing rules are overridden, not conflicts."""
+    res, outs = derive([("T5000", "")], bts_rows=[["T5000", "T5001", "", "a"]], ops_rows=[["T5000", "6000", "z"]])
     o = outs[0]
-    assert (o.tnumber, o.t_rule, o.conflict) == ("T5001", "R1", True)
+    assert (o.tnumber, o.site_id, o.t_rule, o.site_rule, o.conflict) == ("T5001", "5001", "R1", "R1", False)
     statuses = {c.rule_id: s for c, s in o.candidates}
-    assert statuses["R1"] == "SELECTED" and statuses["R2"] == "CONFLICTING"
+    assert statuses["R1"] == "SELECTED" and statuses["R2"] == "OVERRIDDEN BY R1" and statuses["R28"] == "OVERRIDDEN BY R1"
+    assert "RESOLVED_BY_PRIORITY" in exc_categories(res) and "CONFLICTING_MAPPING" not in exc_categories(res)
+
+
+def test_r1_overrides_ambiguous_lower_rules(derive):
+    _, outs = derive([("ABC-T1111-T2222", "")], bts_rows=[["ABC-T1111-T2222", "T7777", "", "a"]])
+    assert (outs[0].tnumber, outs[0].t_rule, outs[0].conflict) == ("T7777", "R1", False)
+
+
+def test_without_r1_highest_priority_rule_wins(derive):
+    """Code rules (R2-R14) outrank ALT rules (R15-R27); the ALT value is recorded as overridden."""
+    res, outs = derive([("12470MTN SYN", "T12740")])
+    o = outs[0]
+    assert (o.tnumber, o.site_id, o.t_rule, o.site_rule, o.conflict) == ("T12470", "12470", "R13", "R13", False)
+    assert any(s == "OVERRIDDEN (LOWER PRIORITY)" for c, s in o.candidates if c.rule_id == "R15")
+
+
+def test_resolved_conflicts_can_still_be_flagged(derive, config_with):
+    cfg = config_with(lambda c: c["derivation"].update(flag_resolved_conflicts=True))
+    res, outs = derive([("12470MTN SYN", "T12740")], config=cfg)
+    assert outs[0].tnumber == "T12470" and outs[0].conflict
     assert "CONFLICTING_MAPPING" in exc_categories(res)
+    # R1 stays authoritative even with the flag on
+    _, outs = derive([("T5000", "")], bts_rows=[["T5000", "T5001", "", "a"]], config=cfg)
+    assert outs[0].tnumber == "T5001" and not outs[0].conflict
 
 
-def test_strict_matching_withholds_conflicting_values(derive):
+def test_strict_matching_withholds_only_non_r1_disagreements(derive):
     _, outs = derive([("T5000", "")], bts_rows=[["T5000", "T5001", "", "a"]], strict=True)
+    assert outs[0].tnumber == "T5001"  # R1 is never withheld
+    _, outs = derive([("12470MTN SYN", "T12740")], strict=True)
     assert outs[0].tnumber == CANNOT_BE_DERIVED and outs[0].t_status == "CONFLICT_WITHHELD"
 
 
@@ -235,13 +261,13 @@ def test_latest_payment_supplied_as_supporting_is_recorded_not_guessed(run):
 def test_unapproved_rules_are_reported_not_executed(derive, config_with):
     def change(c):
         next(r for r in c["rules"] if r["id"] == "R2")["status"] = "requires_confirmation"
-        c["rules"].append({"id": "R30", "kind": "T_DIRECT", "status": "requires_confirmation", "column": "VENDOR_SITE_CODE",
+        c["rules"].append({"id": "R99", "kind": "T_DIRECT", "status": "requires_confirmation", "column": "VENDOR_SITE_CODE",
                            "description": "Pending legacy mapping", "confirmation_needed": "Awaiting business sign-off"})
 
     res, outs = derive([("T6542", "")], config=config_with(change))
     assert res.ruleset.by_id("R2").status == "REQUIRES_CONFIRMATION"
-    assert res.ruleset.by_id("R30").status == "REQUIRES_CONFIRMATION"
+    assert res.ruleset.by_id("R99").status == "REQUIRES_CONFIRMATION"
     assert outs[0].t_rule == "R8"  # R2 not executed; other approved rules keep working
     flagged = " ".join(res.summary["rules_requiring_confirmation"])
-    assert "R2" in flagged and "R30" in flagged
+    assert "R2" in flagged and "R99" in flagged
     assert "RULE_REQUIRES_CONFIRMATION" in exc_categories(res)

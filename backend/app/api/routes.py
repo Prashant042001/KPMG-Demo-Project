@@ -5,17 +5,18 @@ import logging
 import re
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, File, Form, Path, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
 from fastapi.responses import Response
 from starlette.concurrency import run_in_threadpool
 
 from app.config import Settings, get_settings, load_rule_config
-from app.core.errors import FileTooLargeError, FileValidationError
+from app.core.errors import FileTooLargeError, FileValidationError, JobNotFoundError, JobNotReadyError
 from app.core.text import safe_filename
 from app.ingest.readers import UploadedFile, check_extension
 from app.rules.loader import load_ruleset
-from app.services.jobs import Job, JobStore
+from app.services.jobs import COMPLETED, Job, JobStore
 from app.services.pipeline import ProcessOptions, assemble_inputs, describe_rules, run_pipeline
+from app.services.records import MAX_PAGE_SIZE, STATUS_FILTERS, filter_records
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -139,6 +140,7 @@ async def process(
         j.validation = res.bundle.to_dict()
         j.validation["rules"] = describe_rules(res.ruleset)
         j.summary, j.metrics, j.preview, j.outputs = res.summary, res.result.metrics, res.preview, res.outputs
+        j.records, j.gis = res.records, res.gis
 
     store.submit(job, work)
     log.info("Job %s queued (%d supporting file(s))", job.id[:8], len(supporting))
@@ -148,6 +150,41 @@ async def process(
 @router.get("/jobs/{job_id}", summary="Processing status and summary")
 def job_status(job_id: JobId):
     return get_store().get(job_id).public()
+
+
+@router.get("/jobs/{job_id}/records", summary="Search, filter and page through the derived rows of a completed job")
+def job_records(
+    job_id: JobId,
+    q: str = Query("", max_length=100, description="Text to find in Vendor Site Code, ALT, TNUMBER, SITE ID, candidates or reason; or a row number"),
+    status: Literal[tuple(STATUS_FILTERS)] = Query("all", description="Quick filter"),
+    rule: str = Query("", max_length=10, pattern=r"^[A-Za-z0-9]*$", description="Rule ID used for TNUMBER or SITE ID, e.g. R1"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=MAX_PAGE_SIZE),
+):
+    job = get_store().get(job_id)
+    if job.status != COMPLETED:
+        raise JobNotReadyError("Rows are available only after processing completes successfully.")
+    return filter_records(job.records, q=q, status=status, rule=rule, page=page, page_size=page_size)
+
+
+def _completed_job(job_id: str) -> Job:
+    job = get_store().get(job_id)
+    if job.status != COMPLETED:
+        raise JobNotReadyError("Available only after the master database has been generated successfully.")
+    return job
+
+
+@router.get("/jobs/{job_id}/gis", summary="Sites from the Operational Site List, linked to the run's master-database payments")
+def job_gis(job_id: JobId):
+    return _completed_job(job_id).gis.summary()
+
+
+@router.get("/jobs/{job_id}/gis/sites/{site_id}", summary="One site's details and its master-database payment rows")
+def job_gis_site(job_id: JobId, site_id: Annotated[str, Path(pattern=r"^[A-Za-z0-9]{1,20}$")]):
+    detail = _completed_job(job_id).gis.site(site_id)
+    if detail is None:
+        raise JobNotFoundError("Site not found in this run.")
+    return detail
 
 
 def _download(job_id: str, name: str) -> Response:

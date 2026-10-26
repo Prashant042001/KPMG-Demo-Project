@@ -14,6 +14,8 @@ from app.ingest.inputs import InputAssembler, InputBundle
 from app.ingest.readers import UploadedFile
 from app.output import writer
 from app.rules.loader import ACTIVE, DUPLICATE, RuleSet, load_ruleset
+from app.services.gis import GisData, build_gis
+from app.services.records import build_record_rows
 
 log = logging.getLogger(__name__)
 
@@ -34,6 +36,8 @@ class ProcessResult:
     summary: dict[str, Any]
     outputs: dict[str, writer.OutputFile]
     preview: list[dict[str, Any]]
+    records: list[dict[str, Any]]  # every source record, for the searchable results table
+    gis: GisData  # sites linked to master-database payment rows, for the GIS view
 
 
 def assemble_inputs(rule_config: dict[str, Any], settings, source: UploadedFile | None, supporting: list[UploadedFile]) -> InputBundle:
@@ -178,25 +182,10 @@ def run_pipeline(
         "exceptions": writer.OutputFile(f"exception_report_{short}.{fmt}", media, lambda: writer.build_exception_report(result, fmt)),
     }
 
-    preview = [
-        {
-            "row": r.row_number,
-            "vendor_site_code": r.vendor_site_code,
-            "vendor_site_code_alt": r.vendor_site_code_alt,
-            "candidate_tnumbers": r.outcome.candidate_tnumbers,
-            "tnumber": r.outcome.tnumber,
-            "site_id": r.outcome.site_id,
-            "tnumber_rule": r.outcome.t_rule,
-            "site_id_rule": r.outcome.site_rule,
-            "tnumber_status": r.outcome.t_status,
-            "site_id_status": r.outcome.site_status,
-            "conflict": r.conflict,
-            "exception_reason": r.exception_reason,
-        }
-        for r in result.records[:PREVIEW_ROWS]
-    ]
+    records = build_record_rows(result)
+    gis = build_gis(bundle.source, bundle.references.get("ops", []), result, formats)
     log.info(
         "Job %s processed %d rows in %.1fs (T derived %d, Site derived %d)",
         short, metrics["input_rows"], time.time() - started, metrics["tnumber_derived"], metrics["site_id_derived"],
     )
-    return ProcessResult(bundle, ruleset, result, summary, outputs, preview)
+    return ProcessResult(bundle, ruleset, result, summary, outputs, records[:PREVIEW_ROWS], records, gis)

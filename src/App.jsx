@@ -5,11 +5,13 @@ import {
   ChevronDown, CircleHelp, Clock3, Database, FileCheck2, FileSpreadsheet,
   FileText, FolderOpen, Layers3, LayoutDashboard, ListChecks, LockKeyhole, Network,
   RadioTower, RefreshCw, ShieldCheck, Sparkles, UploadCloud, X, Zap,
-  PanelLeftClose, PanelLeftOpen, SlidersHorizontal, Download, AlertTriangle, Loader2
+  PanelLeftClose, PanelLeftOpen, SlidersHorizontal, Download, AlertTriangle, Loader2, MapPin
 } from "lucide-react";
 import {
   downloadOutput, getHealth, getJob, startProcessing, validateFiles
 } from "./api.js";
+import ResultsTable from "./ResultsTable.jsx";
+import GisView from "./GisView.jsx";
 
 const CANNOT = "cannot be derived";
 
@@ -20,6 +22,17 @@ const pipeline = [
   ["Derive T-number & Site ID", "Apply reference look-ups and pattern rules", Network, ["derive"]],
   ["Build master database", "Generate the master workbook and reports", Database, ["build_outputs"]]
 ];
+
+// Modules. Entries with a view open it; the rest are placeholders for later releases.
+const modules = [
+  ["GIS Analysis", "Map sites and their master-database payments", MapPin, "gis"],
+  ["Invoice Validation", "Check invoices against approved site and payment data", FileCheck2],
+  ["Site ID Derivation", "Dedicated Site ID derivation workflow", RadioTower],
+  ["Master Database Generation", "Build the consolidated master database", Database],
+  ["Data Analysis", "Analyse costs, trends and exceptions", BarChart3]
+];
+
+const LAST_JOB_KEY = "nca.lastJobId";
 
 const ROLE_LABELS = {
   source: "Source file",
@@ -161,6 +174,8 @@ export default function App() {
   const [format, setFormat] = useState("xlsx");
   const [strict, setStrict] = useState(false);
   const [notice, setNotice] = useState("");
+  const [moduleNotice, setModuleNotice] = useState("");
+  const [view, setView] = useState("overview"); // "overview" | "gis"
   const [apiOnline, setApiOnline] = useState(null);
   const [validation, setValidation] = useState(null);
   const [requestError, setRequestError] = useState(null);
@@ -180,6 +195,17 @@ export default function App() {
 
   useEffect(() => {
     checkHealth();
+    // Reconnect to the latest run (kept in backend memory for a limited time) after a page refresh.
+    const last = sessionStorage.getItem(LAST_JOB_KEY);
+    if (last) {
+      getJob(last)
+        .then((j) => {
+          setJob(j);
+          if (j.validation) setValidation(j.validation);
+          if (j.status === "queued" || j.status === "running") poll(j.job_id);
+        })
+        .catch(() => sessionStorage.removeItem(LAST_JOB_KEY));
+    }
     return () => clearInterval(pollRef.current);
   }, []);
 
@@ -261,6 +287,7 @@ export default function App() {
       );
       setApiOnline(true);
       setJob({ job_id: res.job_id, status: res.status, stage: "queued", progress: 0 });
+      sessionStorage.setItem(LAST_JOB_KEY, res.job_id);
       poll(res.job_id);
     } catch (err) {
       failRequest(err);
@@ -328,8 +355,11 @@ export default function App() {
 
         <div className="workspace-label">WORKSPACE</div>
         <nav className="nav">
-          <button className="nav-link active" title="Overview">
+          <button className={`nav-link ${view === "overview" ? "active" : ""}`} title="Overview" onClick={() => setView("overview")}>
             <LayoutDashboard size={18} /><span>Overview</span>
+          </button>
+          <button className={`nav-link ${view === "gis" ? "active" : ""}`} title="GIS analysis" onClick={() => setView("gis")}>
+            <MapPin size={18} /><span>GIS analysis</span>
           </button>
           <button
             className="nav-link"
@@ -462,6 +492,64 @@ export default function App() {
           </div>
         </section>
 
+        <section className="module-bar" aria-label="Modules">
+          {modules.map(([name, desc, Icon, target]) => (
+            <button
+              type="button"
+              className={`module-btn ${target && view === target ? "is-active" : ""}`}
+              key={name}
+              onClick={() => {
+                if (target) {
+                  setModuleNotice("");
+                  setView(target);
+                } else {
+                  setModuleNotice(`${name} is not available yet. Its functionality will be added in a later release.`);
+                }
+              }}
+            >
+              <span className="module-head">
+                <span className="module-icon"><Icon size={18} /></span>
+                <span className={`tag ${target ? "tag-purple" : "tag-blue"}`}>{target ? "OPEN" : "COMING SOON"}</span>
+              </span>
+              <span className="module-copy">
+                <b>{name}</b>
+                <small>{desc}</small>
+              </span>
+            </button>
+          ))}
+        </section>
+        {moduleNotice && (
+          <div className="notice">
+            <Clock3 size={17} />
+            <span>{moduleNotice}</span>
+            <button onClick={() => setModuleNotice("")}><X size={14} /></button>
+          </div>
+        )}
+
+        {view === "gis" && (
+          <>
+            <div className="section-title">
+              <div>
+                <div className="step-label">GIS ANALYSIS</div>
+                <h2>Sites and payments map</h2>
+                <p>Click a site to see its details and the payment rows linked to it in the master database.</p>
+              </div>
+              {job?.status === "completed" && (
+                <div className="selection-pill"><Database size={16} /> Run finished {job.finished_at?.replace("T", " ")}</div>
+              )}
+            </div>
+            <GisView
+              job={job}
+              onGoToDerivation={() => {
+                setView("overview");
+                window.scrollTo({ top: 0, behavior: "smooth" });
+              }}
+            />
+          </>
+        )}
+
+        {view === "overview" && (
+          <>
         <div className="section-title">
           <div>
             <div className="step-label">01 / INPUT</div>
@@ -782,49 +870,9 @@ export default function App() {
           </section>
         )}
 
-        {completed && job.preview?.length > 0 && (
-          <section className="panel results">
-            <div className="panel-head">
-              <div>
-                <h3><Database size={17} /> Results preview</h3>
-                <p>First {job.preview.length} of {fmt(metrics.input_rows)} records. The full output is in the master workbook.</p>
-              </div>
-            </div>
-            <div className="table-scroll">
-              <table className="results-table">
-                <thead>
-                  <tr>
-                    <th>Row</th>
-                    <th>Vendor Site Code</th>
-                    <th>VENDOR_SITE_CODE_ALT</th>
-                    <th>Candidate T-number(s)</th>
-                    <th>TNUMBER</th>
-                    <th>SITE ID</th>
-                    <th>T rule</th>
-                    <th>Site rule</th>
-                    <th>Status</th>
-                    <th>Conflict</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {job.preview.map((r) => (
-                    <tr key={r.row} className={r.conflict ? "is-conflict" : ""} title={r.exception_reason || ""}>
-                      <td>{r.row}</td>
-                      <td>{r.vendor_site_code}</td>
-                      <td>{r.vendor_site_code_alt}</td>
-                      <td>{r.candidate_tnumbers}</td>
-                      <td className={r.tnumber === CANNOT ? "muted" : "strong"}>{r.tnumber}</td>
-                      <td className={r.site_id ? "strong" : "muted"}>{r.site_id || "unresolved"}</td>
-                      <td>{r.tnumber_rule}</td>
-                      <td>{r.site_id_rule}</td>
-                      <td>{r.tnumber_status} / {r.site_id_status}</td>
-                      <td>{r.conflict ? "Y" : "N"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
+        {completed && <ResultsTable jobId={job.job_id} />}
+
+          </>
         )}
 
         <footer>
