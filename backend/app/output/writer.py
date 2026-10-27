@@ -23,11 +23,12 @@ from openpyxl.utils import get_column_letter
 
 from app.derivation.engine import EngineResult, RecordResult
 from app.ingest.readers import Table
+from app.output.master_layout import MASTER_COLUMNS, MASTER_HEADERS, master_layout_rows
 from app.rules.loader import RuleSet
 
 EXCEL_MAX_ROWS = 1_048_576
 
-# Required output column names and order (derived fields first, then traceability fields).
+# Derived fields and traceability fields, written per source row to the Derivation Trace sheet.
 DERIVED_COLUMNS = [
     "TNUMBER",
     "SITE ID",
@@ -43,6 +44,8 @@ DERIVED_COLUMNS = [
     "Conflict Indicator",
     "Exception Reason",
 ]
+TRACE_COLUMNS = ["Source Row", *DERIVED_COLUMNS]
+TRACE_WIDTHS = [10, 18, 12, 24, 24, 20, 12, 12, 48, 48, 20, 20, 10, 70]
 MAPPING_COLUMNS = [
     "Source Row", "Source Dataset", "Source File", "Source Field", "Original Source Value", "Matching Key",
     "Derived T-number", "Derived Site ID", "Rule ID", "Mapping Status", "Derivation Source", "Note",
@@ -104,26 +107,26 @@ class _Sanitiser:
         return cell
 
 
-def _header_row(ws, headers: list[str], derived_from: int | None = None) -> list:
+def _header_row(ws, headers: list[str], derived: set[int] | None = None) -> list:
     cells = []
     for i, h in enumerate(headers):
         c = WriteOnlyCell(ws, value=h)
         c.data_type = "s"
         c.font = HEADER_FONT
-        c.fill = DERIVED_FILL if derived_from is not None and i >= derived_from else HEADER_FILL
+        c.fill = DERIVED_FILL if derived and i in derived else HEADER_FILL
         c.alignment = Alignment(vertical="center", wrap_text=True)
         cells.append(c)
     return cells
 
 
-def _sheet(wb: Workbook, title: str, headers: list[str], widths: list[int], derived_from: int | None = None):
+def _sheet(wb: Workbook, title: str, headers: list[str], widths: list[int], derived: set[int] | None = None):
     ws = wb.create_sheet(title)
     ws.freeze_panes = "A2"
     for i, w in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(i)].width = w
     if headers:
         ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}1"
-    ws.append(_header_row(ws, headers, derived_from))
+    ws.append(_header_row(ws, headers, derived))
     return ws
 
 
@@ -157,10 +160,9 @@ def derived_values(r: RecordResult) -> list[Any]:
     ]
 
 
-def master_rows(source: Table, result: EngineResult) -> Iterator[list[Any]]:
-    values = source.df.itertuples(index=False, name=None)
-    for row, rec in zip(values, result.records):
-        yield list(row) + derived_values(rec)
+def trace_rows(result: EngineResult) -> Iterator[list[Any]]:
+    for rec in result.records:
+        yield [rec.row_number, *derived_values(rec)]
 
 
 def mapping_rows(result: EngineResult) -> Iterator[list[Any]]:
@@ -216,15 +218,20 @@ def summary_rows(summary: dict[str, Any]) -> Iterator[list[Any]]:
 
 
 # ----------------------------------------------------------------------------------------------- builders
-def build_master_workbook(source: Table, ruleset: RuleSet, result: EngineResult, summary: dict[str, Any]) -> tuple[bytes, dict[str, int]]:
+def build_master_workbook(
+    source: Table, ruleset: RuleSet, result: EngineResult, summary: dict[str, Any], sites: dict[str, dict[str, Any]]
+) -> tuple[bytes, dict[str, int]]:
+    """``sites``: Operational Site List sites keyed by ``site_key`` (from the GIS build), for the operational columns."""
     san = _Sanitiser()
     wb = Workbook(write_only=True)
     truncated: dict[str, int] = {}
 
-    headers = source.headers + DERIVED_COLUMNS
-    widths = [min(max(len(h) + 4, 12), 40) for h in source.headers] + [18, 12, 24, 24, 20, 12, 12, 48, 48, 20, 20, 10, 70]
-    ws = _sheet(wb, "Master Database", headers, widths, derived_from=len(source.headers))
-    _write_rows(ws, master_rows(source, result), san)
+    widths = [min(max(len(h) + 4, 12), 40) for h in MASTER_HEADERS]
+    derived = {i for i, (_, kind, _) in enumerate(MASTER_COLUMNS) if kind == "derived"}
+    ws = _sheet(wb, "Master Database", MASTER_HEADERS, widths, derived)
+    _write_rows(ws, master_layout_rows(source, result, sites), san)
+    ws = _sheet(wb, "Derivation Trace", TRACE_COLUMNS, TRACE_WIDTHS, set(range(1, 3)))
+    _write_rows(ws, trace_rows(result), san)
 
     n_map = sum(max(len(r.outcome.candidates), 1) for r in result.records)
     ws = _sheet(wb, "Mapping Summary", MAPPING_COLUMNS, [10, 26, 30, 34, 26, 20, 16, 14, 9, 28, 60, 60])

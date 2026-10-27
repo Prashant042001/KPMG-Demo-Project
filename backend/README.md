@@ -2,9 +2,9 @@
 
 FastAPI service used by the React front end of **KPMG - Telecom Solution - Network Cost Assurance and Optimisation**.
 
-**Current scope:** derive `TNUMBER` and `SITE ID` for every record of the uploaded source file, with full traceability.
-Banking details, vendor enrichment, payment enrichment and other operational fields are **out of scope** and are
-neither read nor produced.
+**Current scope:** derive `TNUMBER` and `SITE ID` for every record of the uploaded source file, with full traceability,
+and produce a master database in the final column layout (section 6). In that layout, vendor, banking, address and
+lease fields are **synthetic demo values**: they are never read from any input.
 
 Everything runs locally. No data is sent to external services. Uploaded files and generated outputs are held in
 process memory only and are discarded after `NCA_JOB_TTL_MINUTES` (default 60 minutes).
@@ -165,9 +165,10 @@ The master workbook is always `.xlsx`. The mapping and exception reports follow 
 | POST | `/api/process` | Start a derivation job (returns `202` with a `job_id`) |
 | GET | `/api/jobs/{job_id}` | Status, stage, progress, metrics, summary, 100-row preview |
 | GET | `/api/jobs/{job_id}/records` | Search, filter and page through every derived row: `q` (text or row number), `status` (`all`, `tnumber_derived`, `tnumber_unresolved`, `site_id_unresolved`, `conflict`, `overridden`), `rule` (e.g. `R1`), `page`, `page_size` (max 500) |
+| POST | `/api/gis` | GIS view without derivation: `supporting_files` = Operational Site List file(s), optional `source_file` = payment file. Returns a `job_id` for the two GIS endpoints below |
 | GET | `/api/jobs/{job_id}/gis` | GIS view: sites from the Operational Site List (with coordinates, region, owner) and their linked payment counts and totals |
 | GET | `/api/jobs/{job_id}/gis/sites/{site_id}` | One site's details and its payment rows from the master database (Vendor Name, VENDOR_SITE_CODE, Payment Date, Payment Amount) |
-| GET | `/api/jobs/{job_id}/download/master` | Master workbook (5 sheets) |
+| GET | `/api/jobs/{job_id}/download/master` | Master workbook (6 sheets) |
 | GET | `/api/jobs/{job_id}/download/mapping` | Mapping summary |
 | GET | `/api/jobs/{job_id}/download/exceptions` | Exception report |
 
@@ -245,7 +246,7 @@ There are two kinds of upload:
 8. **Cross-record conflicts:** the same Vendor Site Code resolving to different values across records is flagged as a
    conflict.
 9. **Unresolved values:**
-   - When no T-number can be derived, `TNUMBER` contains exactly `cannot be derived`.
+   - When no T-number can be derived, `TNUMBER` is `NA` in the Master Database (`cannot be derived` in the Derivation Trace).
    - When no Site ID can be derived, `SITE ID` is left blank and flagged.
    - Site IDs never carry prefixes or suffixes (`/E`, `/ELEC`, `MTN`, `T`).
    - An all-zero number (`T0000`, `X000`) is treated as a placeholder and never becomes a T-number or Site ID.
@@ -275,12 +276,22 @@ There are two kinds of upload:
 The **GIS Analysis** button (or *GIS analysis* in the sidebar) opens a map of the sites in the Operational Site List
 Summary.
 
-**How the map is linked to the master database:**
+The page has two modes, chosen at the top:
+
+**With T-number derivation** (linked to the master database):
 - The map belongs to a **completed processing run**. Each run links every site to the master-database rows whose
   derived `SITE ID` equals the site's `Site ID`. Leading zeros are ignored, so `0123` matches `123`.
-- Before any run has completed, the GIS page asks you to run the T-number & Site ID derivation first.
+- Before any run has completed, this mode asks you to run the T-number & Site ID derivation first.
 - The latest run is remembered across page refreshes for as long as the backend keeps it (`NCA_JOB_TTL_MINUTES`,
   default 60). After that, run again.
+
+**Without T-number derivation** (`POST /api/gis`):
+- Upload the Operational Site List Summary (required) and, optionally, a payment file. No rules are run.
+- A payment row is linked to a site by its own `Site ID` column when it has a valid one; otherwise when its
+  `VENDOR_SITE_CODE` / `Vendor Site` equals exactly one site's `Account Number`. Rows that match an Account Number
+  listed under several Site IDs are not linked. The page reports how many rows were linked each way.
+- The T-number shown comes from the payment file's own `T number` column, if it has one.
+- Without a payment file, the map shows site details only.
 
 **Using the map:**
 - Click a site, on the map or in the list, to see:
@@ -290,9 +301,13 @@ Summary.
 - The column headers shown are the ones found in your source file.
 
 **What the map needs:**
-- **Coordinates:** `Latitude` and `Longitude` columns in decimal degrees (e.g. `-26.2041`, `28.0473`; a decimal
-  comma is also accepted), or one `Coordinates` column (`-26.2041, 28.0473`). Sites without coordinates are listed
-  but not plotted, and the page says which columns are missing.
+- **Coordinates:** latitude and longitude columns such as `Latitude` / `Longitude` or `GPS_DEC_LATITUDE` /
+  `GPS_DEC_LONGITUDE` (all accepted names are in `columns.LATITUDE` / `columns.LONGITUDE` of
+  `config/rule_config.json`), or one `Coordinates` column (`-26.2041, 28.0473`).
+  - Decimal degrees (`-26.2041`, a decimal comma is also accepted) and degrees-minutes-seconds (`26°12'15"S`,
+    `S 26 12 15`) are read.
+  - If a sheet has several latitude columns (e.g. `GPS_LATITUDE` and `GPS_DEC_LATITUDE`), the decimal one is used.
+  - Sites without coordinates are listed but not plotted, and the page names the coordinate columns it found.
 - **Paid sites not in the site list** can't be plotted. They are listed as links, so their payments can still be
   opened.
 - **Map background tiles** come from OpenStreetMap by default. Only the visible map area is requested; no site or
@@ -305,17 +320,31 @@ Summary.
 
 **Master workbook** (`master_database_<job>.xlsx`), headers frozen and filterable:
 
-1. **Master Database**: all source rows and columns, unchanged and in their original order, followed by:
-   - the derived fields `TNUMBER` and `SITE ID`;
-   - the traceability fields `Original Vendor Site Code`, `Original VENDOR_SITE_CODE_ALT`,
-     `Candidate T-number(s)`, `T-number Rule ID`, `Site ID Rule ID`, `T-number Derivation Source`,
-     `Site ID Derivation Source`, `T-number Derivation Status`, `Site ID Derivation Status`, `Conflict Indicator` and
-     `Exception Reason`. The derivation sources read `<dataset>: <file> | <field>`.
-2. **Mapping Summary**: one row per rule match per record, showing:
+1. **Master Database**: one row per source row, in the final 64-column layout defined in
+   `app/output/master_layout.py` (`MASTER_COLUMNS`). Each column has one of these sources:
+   - **Derived:** `TNUMBER` and `SITE ID`. `TNUMBER` is `NA` where no T-number can be derived.
+   - **Base payment data** (`Vendor Name`, `Vendor Site Code`, `Invoice Number` … `Historical years payments released
+     in current year`): copied unchanged from the source column with the same header (case- and
+     punctuation-insensitive; `INVOICE_NUM` and `Vendor Site` are also accepted). It is left blank when the source has
+     no such column, and the Processing Summary lists those columns.
+   - **Operational data** (`Site Status`, `Site Name`, `Site Owner`, `Latitude`, `Longitude`): taken from the
+     Operational Site List Summary row whose `Site ID` equals the derived `SITE ID`, otherwise `NA`.
+   - **Randomized / Unused:** synthetic demo values (South African banks with their universal branch codes,
+     addresses, VAT and company registration numbers, lease dates and so on). They are generated deterministically:
+     vendor-level fields from the vendor name, lease-level fields from the vendor site code. A vendor therefore keeps
+     the same details on every row and in every run.
+   - **Rules:** `Payment Type` is `Rental + Fixed` when the invoice number starts with `PN`, otherwise
+     `Variable Electricity`. `Bank Account Name` is the `Vendor Name`.
+2. **Derivation Trace**: `Source Row`, then the derived fields and the traceability fields `Original Vendor Site Code`,
+   `Original VENDOR_SITE_CODE_ALT`, `Candidate T-number(s)`, `T-number Rule ID`, `Site ID Rule ID`,
+   `T-number Derivation Source`, `Site ID Derivation Source`, `T-number Derivation Status`,
+   `Site ID Derivation Status`, `Conflict Indicator` and `Exception Reason`. The derivation sources read
+   `<dataset>: <file> | <field>`. Here `TNUMBER` keeps the internal text `cannot be derived`.
+3. **Mapping Summary**: one row per rule match per record, showing:
    - source dataset, file, field, original value and matching key;
    - the derived values and rule ID;
    - the status (`SELECTED`, `SUPPORTING`, `CONFLICTING`, `AMBIGUOUS`, `INVALID`, `UNVERIFIED`).
-3. **Exceptions**, by category:
+4. **Exceptions**, by category:
 
    | Category | Meaning |
    | --- | --- |
@@ -330,13 +359,13 @@ Summary.
    | `RULE_REQUIRES_CONFIRMATION` | A rule was not executed, pending a business decision |
    | `MISSING_COLUMN`, `OPTIONAL_SOURCE_NOT_USED`, `DATA_QUALITY` | File-level information |
 
-4. **Processing Summary**:
+5. **Processing Summary**:
    - row and file counts;
    - T-numbers derived, unresolved and conflicting, with the measured match rate and **derivations per rule ID**;
    - status counts, exception counts and rule execution counts;
    - reference statistics;
    - the rule configuration version, and the assumptions that need confirmation.
-5. **Rule Audit**: for each rule, its ID, description, priority, records evaluated, matches, selections, exceptions
+6. **Rule Audit**: for each rule, its ID, description, priority, records evaluated, matches, selections, exceptions
    and confirmation status.
 
 **Derivation statuses:**

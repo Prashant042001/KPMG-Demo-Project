@@ -53,6 +53,11 @@ export async function getGis(jobId) {
   return parse(await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/gis`));
 }
 
+// GIS view without T-number derivation: Operational Site List file(s) plus an optional payment file.
+export async function createGis({ sites, payments }) {
+  return parse(await fetch(`${API_BASE}/api/gis`, { method: "POST", body: uploadForm({ source: payments, support: sites }) }));
+}
+
 export async function getGisSite(jobId, siteId) {
   return parse(await fetch(`${API_BASE}/api/jobs/${encodeURIComponent(jobId)}/gis/sites/${encodeURIComponent(siteId)}`));
 }

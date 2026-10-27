@@ -1332,6 +1332,82 @@ footer span:last-child { display: flex; align-items: center; gap: 5px; }
 .gis-empty h3 { margin: 0; font-size: 18px; color: #2a3e55; }
 .gis-empty p { max-width: 640px; margin: 0; line-height: 1.6; font-size: 15px; }
 .gis-cta { width: auto; padding: 11px 18px; }
+.gis-empty-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+
+.gis-modes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; margin-bottom: 15px; }
+.gis-modes button {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  text-align: left;
+  border: 1px solid #d6e1ed;
+  border-radius: 9px;
+  background: #fff;
+  padding: 11px 14px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #426482;
+}
+.gis-modes button small { flex-basis: 100%; font-size: 13px; font-weight: 500; color: #8c9aab; }
+.gis-modes button:hover { border-color: #7faecc; background: #f6fbff; }
+.gis-modes button.active { border-color: #174f8d; box-shadow: 0 0 0 2px #174f8d22; color: #174f8d; }
+
+.gis-upload { padding: 18px; display: grid; gap: 12px; }
+.gis-upload h4 { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 16px; color: #2a3e55; }
+.gis-upload h4 svg { color: #4c83ad; }
+.gis-upload .gis-muted { margin: 0; }
+.gis-upload-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.gis-file { display: grid; gap: 6px; border: 1px dashed #c9d8e7; border-radius: 9px; padding: 12px; background: #fbfdff; font-size: 14px; color: #354a63; }
+.gis-file small { color: #8c9aab; font-size: 13px; word-break: break-word; }
+.gis-file .req, .gis-file .opt { font-size: 12px; font-weight: 600; margin-left: 4px; }
+.gis-file .req { color: #b06a24; }
+.gis-file .opt { color: #8c9aab; }
+.gis-upload .gis-cta { justify-self: start; }
+.gis-direct-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; font-size: 14px; color: #426482; }
+.gis-direct-bar span { display: inline-flex; align-items: center; gap: 6px; }
+
+/* Quarterly payments chart (GIS view) */
+.pay-chart { padding: 16px; margin-top: 15px; }
+.pay-chart-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.pay-chart-head h4 { display: flex; align-items: center; gap: 7px; margin: 0 0 4px; font-size: 16px; color: #2a3e55; }
+.pay-chart-head h4 svg { color: #4c83ad; }
+.pay-chart-head .gis-muted { display: block; margin: 0; }
+.pay-chart-head .gis-muted b { color: #2a3e55; }
+.pay-chart-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pay-legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 12px 0 6px; font-size: 13px; color: #6d7f94; }
+.pay-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.pay-legend i, .pay-tip i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; flex: 0 0 10px; }
+.pay-legend b { color: #2a3e55; font-variant-numeric: tabular-nums; }
+.pay-plot { position: relative; max-width: 900px; }
+.pay-plot svg { display: block; width: 100%; height: auto; overflow: visible; }
+.pay-plot rect:focus { outline: none; }
+.pay-plot rect:focus-visible { outline: 2px solid #174f8d; }
+.pay-grid { stroke: #eef2f6; stroke-width: 1; }
+.pay-baseline { stroke: #c9d3de; stroke-width: 1; }
+.pay-axis { fill: #8c9aab; font-size: 11px; font-variant-numeric: tabular-nums; }
+.pay-tip {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  display: grid;
+  gap: 4px;
+  min-width: 210px;
+  padding: 8px 10px;
+  border: 1px solid #e3e9f0;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 6px 18px #1a2b4024;
+  font-size: 13px;
+  color: #40536a;
+  pointer-events: none;
+}
+.pay-tip b { color: #2a3e55; }
+.pay-tip span { display: flex; align-items: center; gap: 6px; }
+.pay-tip span.is-active { color: #2a3e55; font-weight: 600; }
+.pay-tip em { margin-left: auto; padding-left: 10px; font-style: normal; font-variant-numeric: tabular-nums; }
+.pay-empty { padding: 30px 0; justify-content: center; }
+.pay-chart td small { color: #96a2b1; }
 
 @media (max-width: 1150px) {
   .gis-layout { grid-template-columns: 1fr; }

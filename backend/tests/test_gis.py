@@ -1,6 +1,7 @@
 """GIS view: Operational Site List sites linked to master-database payment rows (synthetic data only)."""
 from __future__ import annotations
 
+import datetime as dt
 import time
 
 import pytest
@@ -39,7 +40,27 @@ def test_sites_are_linked_to_master_payment_rows_by_site_id(gis):
     assert pay["payment_date"].startswith("2025-")
     assert detail["site"]["payment_total"] == round(sum(float(p["payment_amount"]) for p in detail["payments"]), 2)
     assert detail["fields"] == {"vendor_name": "Vendor Name", "vendor_site_code": "VENDOR_SITE_CODE",
-                                "payment_date": "Payment Date", "payment_amount": "Payment Amount"}
+                                "payment_date": "Payment Date", "payment_amount": "Payment Amount",
+                                "invoice_number": "INVOICE_NUM"}
+
+
+# ---------------------------------------------------------------- quarterly chart
+def test_quarterly_chart_splits_rental_and_electricity(run):
+    header = ["Invoice Number", "VENDOR_SITE_CODE", "Vendor Name", "Payment Date", "Payment Amount"]
+    rows = [["PN-1", "T6542", "V", dt.date(2025, 1, 15), 100],      # Q1 rental
+            ["INV-2", "T6542", "V", "2025-02-01", "50.5"],           # Q1 electricity (text date)
+            ["PN-3", "T6542", "V", "15/08/2025", "1,000"],           # Q3 rental (d/m/Y)
+            ["INV-4", "3133MTN", "V", dt.date(2025, 12, 31), 7],     # Q4 electricity, another site
+            ["PN-5", "T6542", "V", dt.date(2024, 3, 1), 999],        # other year: excluded
+            ["INV-6", "T6542", "V", None, 5]]                        # no date: excluded
+    gis = run(source=syn.base_workbook(rows, header=header)).gis
+    overall = {q["quarter"]: q for q in gis.summary()["chart"]["quarters"]}
+    assert (overall["Q1"]["rental"], overall["Q1"]["electricity"]) == (100.0, 50.5)
+    assert (overall["Q3"]["rental"], overall["Q4"]["electricity"], overall["Q2"]["rental"]) == (1000.0, 7.0, 0.0)
+    site = {q["quarter"]: q for q in gis.site("6542")["chart"]["quarters"]}
+    assert site["Q4"]["electricity"] == 0.0 and site["Q3"]["rental_count"] == 1
+    assert gis.site("6542")["payments"][0]["payment_type"] == "Rental + Fixed"
+    assert gis.summary()["chart"]["year"] == 2025 and gis.summary()["chart"]["has_dates"]
 
 
 def test_site_without_payments_and_unlisted_paid_sites(gis):
@@ -66,6 +87,20 @@ def test_combined_coordinates_column(run):
     site = run(ops=ops).gis.site("6542")["site"]
     assert (site["lat"], site["lon"]) == (-29.85, 31.02)
     assert _split_coordinates("bad") == (None, None)
+
+
+def test_gps_decimal_columns_are_preferred_over_other_coordinate_columns(run):
+    header = ["Account Number", "Site ID", "GPS_LATITUDE", "GPS_LONGITUDE", "GPS_DEC_LATITUDE", "GPS_DEC_LONGITUDE"]
+    ops = syn.ops_workbook([["OPS-1", "6542", "29 51 31 S", "31 01 18 E", -29.8587, 31.0218]], header=header)
+    gis = run(ops=ops).gis
+    assert (gis.site("6542")["site"]["lat"], gis.site("6542")["site"]["lon"]) == (-29.8587, 31.0218)
+    assert "GPS_DEC_LATITUDE / GPS_DEC_LONGITUDE" in gis.summary()["stats"]["coordinate_columns"][0]
+
+
+@pytest.mark.parametrize("value,expected", [("26°12'15\"S", -26.204167), ("S 26 12 15", -26.204167), ("28.03 E", 28.03),
+                                            ("18°25'E", 18.416667), ("26 75 00 S", None), ("N 26 S", None)])
+def test_dms_coordinate_parsing(value, expected):
+    assert _coordinate(value) == expected
 
 
 def test_no_coordinates_is_explained(run):
@@ -118,3 +153,51 @@ def test_gis_endpoints(client):
 
 def test_gis_needs_a_master_database_run(client):
     assert client.get("/api/jobs/" + "c" * 32 + "/gis").status_code == 404
+
+
+# ---------------------------------------------------------------- without T-number derivation
+def _direct(rule_config, settings, payments=None, ops=None):
+    from app.ingest.readers import UploadedFile
+    from app.services.pipeline import run_gis_direct
+
+    pay = UploadedFile("payments.xlsx", payments, "source") if payments is not None else None
+    return run_gis_direct(rule_config, settings, pay, [UploadedFile("sites.xlsx", ops or syn.ops_workbook(), "supporting")])[1]
+
+
+def test_direct_gis_with_site_list_only(rule_config, settings):
+    gis = _direct(rule_config, settings)
+    summary = gis.summary()
+    assert summary["mode"] == "direct" and len(summary["sites"]) == 8 and summary["stats"]["sites_with_coordinates"] == 7
+    assert gis.site("6542")["site"]["payment_count"] == 0 and "site details only" in " ".join(summary["notes"])
+
+
+def test_direct_gis_links_payments_by_site_id_then_account_number(rule_config, settings):
+    header = ["Vendor Name", "VENDOR_SITE_CODE", "Site ID", "T number", "Payment Date", "Payment Amount"]
+    rows = [["V1", "anything", "6542", "T6542", "2025-01-01", "100"],
+            ["V2", "OPS-9001", None, None, "2025-02-01", "50.5"],   # Account Number of site 9001
+            ["V3", "OPS-9001", "", "", "2025-03-01", "49.5"],
+            ["V4", "NO-MATCH", None, None, "2025-04-01", "1"]]
+    gis = _direct(rule_config, settings, payments=syn.base_workbook(rows, header=header))
+    assert gis.site("6542")["site"]["payment_count"] == 1 and gis.site("6542")["site"]["tnumber"] == "T6542"
+    site = gis.site("9001")
+    assert site["site"]["payment_count"] == 2 and site["site"]["payment_total"] == 100.0 and site["site"]["tnumber"] is None
+    stats = gis.summary()["stats"]
+    assert (stats["linked_by_site_id"], stats["linked_by_account_number"], stats["unlinked_payment_rows"]) == (1, 2, 1)
+
+
+def test_direct_gis_requires_a_site_list(rule_config, settings):
+    from app.core.errors import FileValidationError
+
+    with pytest.raises(FileValidationError):
+        _direct(rule_config, settings, ops=syn.bts_workbook())
+
+
+def test_direct_gis_endpoint(client):
+    files = [("supporting_files", ("o.xlsx", syn.ops_workbook(), XLSX)), ("source_file", ("src.xlsx", syn.base_workbook(), XLSX))]
+    res = client.post("/api/gis", files=files)
+    assert res.status_code == 200 and res.json()["mode"] == "direct"
+    job_id = res.json()["job_id"]
+    body = client.get(f"/api/jobs/{job_id}/gis").json()
+    assert body["mode"] == "direct" and len(body["sites"]) == 8
+    assert client.get(f"/api/jobs/{job_id}/gis/sites/6600").json()["site"]["payment_count"] >= 1  # ACC-500 = source code
+    assert client.post("/api/gis", files=[("source_file", ("src.xlsx", syn.base_workbook(), XLSX))]).status_code == 422

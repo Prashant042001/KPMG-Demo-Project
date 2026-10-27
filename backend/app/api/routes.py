@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, File, Form, Path, Query, UploadFile
@@ -15,7 +16,7 @@ from app.core.text import safe_filename
 from app.ingest.readers import UploadedFile, check_extension
 from app.rules.loader import load_ruleset
 from app.services.jobs import COMPLETED, Job, JobStore
-from app.services.pipeline import ProcessOptions, assemble_inputs, describe_rules, run_pipeline
+from app.services.pipeline import ProcessOptions, assemble_inputs, describe_rules, run_gis_direct, run_pipeline
 from app.services.records import MAX_PAGE_SIZE, STATUS_FILTERS, filter_records
 
 log = logging.getLogger(__name__)
@@ -172,6 +173,23 @@ def _completed_job(job_id: str) -> Job:
     if job.status != COMPLETED:
         raise JobNotReadyError("Available only after the master database has been generated successfully.")
     return job
+
+
+@router.post("/gis", summary="Build the GIS view without T-number derivation")
+async def gis_direct(
+    source_file: UploadFile | None = File(None, description="Optional payment file (Site ID or Vendor Site Code column)"),
+    supporting_files: list[UploadFile] | None = File(None, description="Operational Site List Summary file(s)"),
+    settings: Settings = Depends(get_settings),
+):
+    payments, site_files = await _read_all(source_file, supporting_files, settings)
+    rc = load_rule_config(settings.rule_config_path)
+    bundle, gis = await run_in_threadpool(run_gis_direct, rc, settings, payments, site_files)
+    # Stored like a finished job so the existing GET /api/jobs/{job_id}/gis endpoints serve it.
+    job = get_store().create()
+    job.validation, job.gis = bundle.to_dict(), gis
+    job.status, job.stage, job.progress, job.finished_at = COMPLETED, "completed", 100, time.time()
+    log.info("GIS job %s built without derivation (%d site file(s))", job.id[:8], len(site_files))
+    return {"job_id": job.id, "status": job.status, "mode": gis.mode}
 
 
 @router.get("/jobs/{job_id}/gis", summary="Sites from the Operational Site List, linked to the run's master-database payments")

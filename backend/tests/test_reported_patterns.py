@@ -113,7 +113,7 @@ def test_diagnostic_columns_present(run):
 
     from openpyxl import load_workbook
 
-    ws = load_workbook(io.BytesIO(run().outputs["master"].content))["Master Database"]
+    ws = load_workbook(io.BytesIO(run().outputs["master"].content))["Derivation Trace"]
     header = [c.value for c in ws[1]]
     for col in ("Original Vendor Site Code", "Original VENDOR_SITE_CODE_ALT", "Candidate T-number(s)", "TNUMBER", "SITE ID",
                 "T-number Rule ID", "T-number Derivation Source", "T-number Derivation Status", "Conflict Indicator", "Exception Reason"):

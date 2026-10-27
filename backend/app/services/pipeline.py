@@ -13,8 +13,9 @@ from app.derivation.reference import build_reference_data
 from app.ingest.inputs import InputAssembler, InputBundle
 from app.ingest.readers import UploadedFile
 from app.output import writer
+from app.output.master_layout import missing_base_columns
 from app.rules.loader import ACTIVE, DUPLICATE, RuleSet, load_ruleset
-from app.services.gis import GisData, build_gis
+from app.services.gis import GisData, build_gis, build_gis_direct
 from app.services.records import build_record_rows
 
 log = logging.getLogger(__name__)
@@ -43,6 +44,20 @@ class ProcessResult:
 def assemble_inputs(rule_config: dict[str, Any], settings, source: UploadedFile | None, supporting: list[UploadedFile]) -> InputBundle:
     assembler = InputAssembler(rule_config, allowed_ext=settings.extensions, scan_rows=settings.header_scan_rows)
     return assembler.assemble(source, supporting)
+
+
+def run_gis_direct(
+    rule_config: dict[str, Any], settings, payments: UploadedFile | None, site_files: list[UploadedFile]
+) -> tuple[InputBundle, GisData]:
+    """GIS view without T-number derivation: sites from the site list, payments linked by Site ID / Account Number."""
+    assembler = InputAssembler(rule_config, allowed_ext=settings.extensions, scan_rows=settings.header_scan_rows)
+    bundle = assembler.assemble_gis(payments, site_files)
+    if not bundle.valid:
+        raise FileValidationError("Input validation failed. Review the validation messages.", details=bundle.errors)
+    formats = IdentifierFormats(load_ruleset(rule_config), rule_config)
+    gis = build_gis_direct(bundle.source, bundle.references["ops"], formats)
+    gis.notes += bundle.warnings
+    return bundle, gis
 
 
 def describe_rules(ruleset: RuleSet) -> dict[str, Any]:
@@ -168,7 +183,19 @@ def run_pipeline(
         "notes": ruleset.notes + result.notes + bundle.warnings,
     }
 
-    master, write_stats = writer.build_master_workbook(src, ruleset, result, summary)
+    gis = build_gis(bundle.source, bundle.references.get("ops", []), result, formats)
+    missing = missing_base_columns(src)
+    if missing:
+        summary["notes"].append(
+            "Master Database columns left blank because the source file has no matching column: " + ", ".join(missing) + "."
+        )
+    summary["notes"].append(
+        "Master Database columns marked Randomized/Unused (vendor, bank, address and lease details) contain synthetic demo "
+        "values, generated consistently per vendor and per vendor site code. Operational columns come from the "
+        "Operational Site List Summary by SITE ID (NA when not found). TNUMBER is NA where it cannot be derived; the "
+        "full derivation trace is in the Derivation Trace sheet."
+    )
+    master, write_stats = writer.build_master_workbook(src, ruleset, result, summary, gis.sites)
     if any(write_stats.values()):
         log.info("Output write stats: %s", write_stats)
     stage("build_outputs", 92)
@@ -183,7 +210,6 @@ def run_pipeline(
     }
 
     records = build_record_rows(result)
-    gis = build_gis(bundle.source, bundle.references.get("ops", []), result, formats)
     log.info(
         "Job %s processed %d rows in %.1fs (T derived %d, Site derived %d)",
         short, metrics["input_rows"], time.time() - started, metrics["tnumber_derived"], metrics["site_id_derived"],

@@ -27,7 +27,6 @@ const pipeline = [
 const modules = [
   ["GIS Analysis", "Map sites and their master-database payments", MapPin, "gis"],
   ["Invoice Validation", "Check invoices against approved site and payment data", FileCheck2],
-  ["Site ID Derivation", "Dedicated Site ID derivation workflow", RadioTower],
   ["Master Database Generation", "Build the consolidated master database", Database],
   ["Data Analysis", "Analyse costs, trends and exceptions", BarChart3]
 ];
@@ -361,28 +360,6 @@ export default function App() {
           <button className={`nav-link ${view === "gis" ? "active" : ""}`} title="GIS analysis" onClick={() => setView("gis")}>
             <MapPin size={18} /><span>GIS analysis</span>
           </button>
-          <button
-            className="nav-link"
-            title="Master database"
-            onClick={() => download("master")}
-          >
-            <Database size={18} /><span>Master database</span>
-            <span className="nav-count">01</span>
-          </button>
-          <button
-            className="nav-link"
-            title="Mapping review"
-            onClick={() => download("mapping")}
-          >
-            <Network size={18} /><span>Mapping review</span>
-          </button>
-          <button
-            className="nav-link"
-            title="Exceptions & review"
-            onClick={() => download("exceptions")}
-          >
-            <FileCheck2 size={18} /><span>Exceptions &amp; review</span>
-          </button>
         </nav>
 
         <div className="side-rule" />
@@ -532,7 +509,7 @@ export default function App() {
               <div>
                 <div className="step-label">GIS ANALYSIS</div>
                 <h2>Sites and payments map</h2>
-                <p>Click a site to see its details and the payment rows linked to it in the master database.</p>
+                <p>Click a site to see its details and linked payments, with or without running the T-number derivation.</p>
               </div>
               {job?.status === "completed" && (
                 <div className="selection-pill"><Database size={16} /> Run finished {job.finished_at?.replace("T", " ")}</div>

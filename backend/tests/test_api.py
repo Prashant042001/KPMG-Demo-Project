@@ -93,7 +93,7 @@ def test_process_and_download(client):
         d = client.get(f"/api/jobs/{job['job_id']}/download/{kind}")
         assert d.status_code == 200 and "attachment" in d.headers["content-disposition"]
     wb = load_workbook(io.BytesIO(client.get(f"/api/jobs/{job['job_id']}/download/master").content))
-    assert wb.sheetnames == ["Master Database", "Mapping Summary", "Exceptions", "Processing Summary", "Rule Audit"]
+    assert wb.sheetnames == ["Master Database", "Derivation Trace", "Mapping Summary", "Exceptions", "Processing Summary", "Rule Audit"]
 
 
 def test_legacy_rules_file_field_is_ignored(client):

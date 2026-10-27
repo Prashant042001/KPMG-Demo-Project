@@ -1,5 +1,5 @@
 {
-  "_comment": "AUTHORITATIVE business configuration for T-number / Site ID derivation. It is version-controlled and loaded by the backend at the start of every processing job; users never upload rules. 'rules' holds the approved rules (taken from the approved T Number Rules worksheet), 'patterns' their technical definitions. Column aliases are compared after lower-casing and removing every non-alphanumeric character.",
+  "_comment": "AUTHORITATIVE business configuration for T-number / Site ID derivation. It is version-controlled and loaded by the backend at the start of every processing job; users never upload rules. 'rules' holds the approved rules (taken from the approved T Number Rules worksheet), 'patterns' their technical definitions. Column aliases are compared after lower-casing and removing every non-alphanumeric character; when several columns of a worksheet match the same key, the one whose alias is listed first wins (so decimal-degree GPS_DEC_LATITUDE beats GPS_LATITUDE).",
   "version": "2026-10-23.3",
 
   "columns": {
@@ -10,13 +10,17 @@
     "SITE_ID": ["siteid"],
     "ACCOUNT_NUMBER": ["accountnumber", "accountno", "accountnum", "acctnumber"],
 
-    "LATITUDE": ["latitude", "lat", "latdd", "latitudedd"],
-    "LONGITUDE": ["longitude", "long", "lon", "lng", "longdd", "longitudedd"],
+    "LATITUDE": ["gpsdeclatitude", "gpsdeclat", "declatitude", "declat", "decimallatitude", "latitudedecimal", "latdd", "latitudedd",
+                 "latitude", "lat", "gpslatitude", "gpslat", "sitelatitude"],
+    "LONGITUDE": ["gpsdeclongitude", "gpsdeclong", "gpsdeclon", "declongitude", "declong", "declon", "decimallongitude", "longitudedecimal",
+                  "longdd", "longitudedd", "longitude", "long", "lon", "lng", "gpslongitude", "gpslong", "gpslon", "sitelongitude"],
     "COORDINATES": ["coordinates", "gpscoordinates", "gps", "latlong", "latlng", "location"],
     "SITE_NAME": ["sitename"],
     "REGION": ["region"],
-    "PROPERTY_OWNER": ["propertyowner"],
+    "PROPERTY_OWNER": ["propertyowner", "siteowner"],
+    "SITE_STATUS": ["sitestatus", "operationalstatus"],
     "VENDOR_NAME": ["vendorname", "suppliername"],
+    "INVOICE_NUMBER": ["invoicenumber", "invoicenum", "invoiceno"],
     "PAYMENT_DATE": ["paymentdate", "checkdate", "paiddate"],
     "PAYMENT_AMOUNT": ["paymentamount", "amountpaid"]
   },
@@ -37,7 +41,7 @@
     "ops": {
       "label": "Operational Site List Summary",
       "required": ["ACCOUNT_NUMBER", "SITE_ID"],
-      "optional": ["SITE_NAME", "REGION", "PROPERTY_OWNER", "LATITUDE", "LONGITUDE", "COORDINATES"],
+      "optional": ["SITE_NAME", "SITE_STATUS", "REGION", "PROPERTY_OWNER", "LATITUDE", "LONGITUDE", "COORDINATES"],
       "filename_hints": ["operational", "opssite", "sitelist"]
     },
     "latest_payment": {

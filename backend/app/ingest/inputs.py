@@ -23,6 +23,13 @@ log = logging.getLogger(__name__)
 
 SOURCE_ROLE = "source"
 SUPPORTING_ROLES = ("bts", "ops", "latest_payment")
+# Payment file of the GIS view without T-number derivation: linked to sites by Site ID or Vendor Site Code.
+GIS_PAYMENTS_ROLE = "gis_payments"
+GIS_PAYMENTS_SPEC = {
+    "label": "Payment file",
+    "required_any": [["SITE_ID", "VENDOR_SITE_CODE", "VENDOR_SITE"]],
+    "optional": ["T_NUMBER", "VENDOR_NAME", "INVOICE_NUMBER", "PAYMENT_DATE", "PAYMENT_AMOUNT"],
+}
 
 
 @dataclass
@@ -104,15 +111,16 @@ class InputAssembler:
     def __init__(self, rule_config: dict[str, Any], *, allowed_ext: set[str], scan_rows: int):
         self.resolver = ColumnResolver(rule_config["columns"])
         self.roles = {r: RoleSpec(r, s) for r, s in rule_config["file_roles"].items() if not r.startswith("_")}
+        self.roles.setdefault(GIS_PAYMENTS_ROLE, RoleSpec(GIS_PAYMENTS_ROLE, GIS_PAYMENTS_SPEC))
         self.allowed_ext = allowed_ext
         self.scan_rows = scan_rows
 
     def label(self, role: str) -> str:
         return self.roles[role].label if role in self.roles else role
 
-    def _source_sheet(self, f: UploadedFile, report: FileReport) -> Table | None:
-        """Pick the worksheet of the source file that best satisfies the source role."""
-        spec = self.roles[SOURCE_ROLE]
+    def _source_sheet(self, f: UploadedFile, report: FileReport, role: str = SOURCE_ROLE) -> Table | None:
+        """Pick the worksheet of the file that best satisfies ``role`` (the source role by default)."""
+        spec = self.roles[role]
         best: tuple[float, int, Table] | None = None
         for sheet, raw in read_raw_sheets(f, self.allowed_ext).items():
             idx, cols = detect_header(raw, self.resolver, spec.keys, self.scan_rows)
@@ -120,7 +128,7 @@ class InputAssembler:
             sr = SheetReport(sheet=sheet, role=None, missing_columns=spec.missing(cols))
             if score is not None:
                 table = build_table(f.name, sheet, raw, idx, cols)
-                sr.role, sr.header_row, sr.rows = SOURCE_ROLE, table.header_row, table.row_count
+                sr.role, sr.header_row, sr.rows = role, table.header_row, table.row_count
                 sr.matched_columns = [table.headers[p] for p in sorted(cols.values()) if p < len(table.headers)]
                 if best is None or (score, table.row_count) > (best[0], best[1]):
                     best = (score, table.row_count, table)
@@ -223,4 +231,48 @@ class InputAssembler:
                 bundle.warnings.append(
                     f"No {label} was supplied; the derivation steps that need it will be skipped and reported per record."
                 )
+        return bundle
+
+    def assemble_gis(self, payments: UploadedFile | None, site_files: list[UploadedFile]) -> InputBundle:
+        """Inputs of the GIS view without T-number derivation.
+
+        ``site_files`` must contain an Operational Site List Summary; ``payments`` is optional and becomes
+        ``bundle.source``. Other supporting datasets in ``site_files`` are ignored.
+        """
+        bundle = InputBundle(references={"ops": []})
+        for f in site_files:
+            rep = FileReport(f.name, "supporting", f.size)
+            bundle.files.append(rep)
+            try:
+                found = [(r, t) for r, t in self._classify_supporting(f, rep) if r == "ops"]
+            except FileValidationError as exc:
+                rep.status = "error"
+                rep.messages.append(exc.message)
+                bundle.warnings.append(f"{exc.message} It will not be used.")
+                continue
+            if not found:
+                rep.status = "ignored"
+                msg = f"'{f.name}' has no worksheet with the Operational Site List columns (Account Number, Site ID); it will not be used."
+                rep.messages.append(msg)
+                bundle.warnings.append(msg)
+                continue
+            rep.role = "ops"
+            bundle.references["ops"] += [t for _, t in found]
+        if not bundle.references["ops"]:
+            bundle.errors.append("An Operational Site List Summary (with Account Number and Site ID columns) is required for the map.")
+
+        if payments is not None:
+            rep = FileReport(payments.name, "source", payments.size, role=GIS_PAYMENTS_ROLE)
+            bundle.files.append(rep)
+            try:
+                bundle.source = self._source_sheet(payments, rep, GIS_PAYMENTS_ROLE)
+                if bundle.source is None:
+                    rep.status = "error"
+                    msg = f"'{payments.name}': no worksheet contains a Site ID or Vendor Site Code column."
+                    rep.messages.append(msg)
+                    bundle.errors.append(msg)
+            except FileValidationError as exc:
+                rep.status = "error"
+                rep.messages.append(exc.message)
+                bundle.errors.append(exc.message)
         return bundle
